@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Bike computer: receives power/cadence and serves a live dashboard over HTTP.
 
-    python3 bikecomputer.py --source ant      # Magene USB ANT+ stick
-    python3 bikecomputer.py --source ble      # Pi's built-in Bluetooth
-    python3 bikecomputer.py --source sim      # fake data, for testing
+    .venv/bin/python bikecomputer.py --source ant   # Magene USB ANT+ stick
+    .venv/bin/python bikecomputer.py --source ble   # Pi's built-in Bluetooth
+    python3 bikecomputer.py --source sim            # fake data, no extra libraries
 
 Then open http://<pi-address>:8080 on a phone/tablet/laptop on the same network.
 """
@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import queue
+import sys
 import threading
 import time
 from datetime import datetime
@@ -157,6 +158,17 @@ def main():
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
+
+    # Fail fast with a clear message if the library for this source is missing,
+    # instead of a background thread dying while the dashboard keeps running.
+    needed = {"ant": "openant", "ble": "bleak"}.get(args.source)
+    if needed:
+        import importlib.util
+        if importlib.util.find_spec(needed) is None:
+            raise SystemExit(
+                f"Python module '{needed}' is not installed for {sys.executable}.\n"
+                f"Run with the project's virtual environment:  .venv/bin/python bikecomputer.py --source {args.source}\n"
+                f"or install it there:  .venv/bin/pip install -r requirements.txt")
 
     side = args.unknown_balance_side or ("left" if args.source == "ble" else "right")
     ride = Ride(unknown_balance_side=side,

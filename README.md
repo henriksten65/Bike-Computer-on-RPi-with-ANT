@@ -23,16 +23,18 @@ Open http://localhost:8080. Only the Python standard library is needed for this.
 ## 2. Set up the Raspberry Pi
 
 Flash **Raspberry Pi OS Lite (64-bit)** with Raspberry Pi Imager. In the Imager settings, enter
-your Wi-Fi details, enable SSH, set the user name to `pi` and the hostname to `bike`.
+your Wi-Fi details and enable SSH. This setup uses user `henriks`, hostname `Pi4Biker`, and the
+project folder `/home/henriks/dev/Claude/Bike computer`. If you use a different user or folder,
+change `User`, `WorkingDirectory` and `ExecStart` in `deploy/bikecomputer.service` to match.
 
 ```bash
 # copy this folder to the Pi (from your PC)
-scp -r "Bike computer" pi@bike.local:bike-computer
+scp -r "Bike computer" "henriks@Pi4Biker.local:dev/Claude/"
 
 # on the Pi
-ssh pi@bike.local
+ssh henriks@Pi4Biker.local
 sudo apt update && sudo apt install -y python3-venv libusb-1.0-0
-cd ~/bike-computer
+cd "/home/henriks/dev/Claude/Bike computer"
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
@@ -54,7 +56,7 @@ in the udev rule, and `openant` may need to be told about it.
 .venv/bin/python bikecomputer.py --source ant
 ```
 Start pedalling to wake the pedals. The log prints `ANT+ power meter found`. On your phone, open
-**http://bike.local:8080** (or `http://<pi-ip>:8080`). The phone screen stays on while the
+**http://Pi4Biker.local:8080** (or `http://<pi-ip>:8080`). The phone screen stays on while the
 page is open (in browsers that support the Wake Lock API).
 
 Use **Add to Home Screen** for a full-screen app-like view.

@@ -4,9 +4,9 @@ After=network-online.target bluetooth.target
 Wants=network-online.target
 
 [Service]
-User=pi
-WorkingDirectory=/home/pi/bike-computer
-ExecStart=/home/pi/bike-computer/.venv/bin/python bikecomputer.py --source ant
+User=henriks
+WorkingDirectory=/home/henriks/dev/Claude/Bike computer
+ExecStart="/home/henriks/dev/Claude/Bike computer/.venv/bin/python" bikecomputer.py --source ant
 Restart=always
 RestartSec=3
 

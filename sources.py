@@ -69,7 +69,7 @@ class AntSource:
                          self.device_id or "any")
                 self.node.start()              # blocks until stopped / error
             except Exception as e:  # USB unplugged, permissions, ...
-                log.error("ANT+ error: %s; retrying in 5 s", e)
+                log.error("ANT+ error: %s: %s; retrying in 5 s", type(e).__name__, e)
                 try:
                     self.node.stop()
                 except Exception:
