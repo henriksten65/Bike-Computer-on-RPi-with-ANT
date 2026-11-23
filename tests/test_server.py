@@ -75,6 +75,19 @@ class ServerTest(unittest.TestCase):
         self.assertIn("attachment", r.getheader("Content-Disposition"))
         self.assertTrue(body.startswith(b"time_iso,"))
 
+    def test_tcx_download(self):
+        r, body = self.request("GET", "/rides/ride-20261123-100000.tcx")
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.getheader("Content-Type"), "application/vnd.garmin.tcx+xml")
+        self.assertIn('filename="ride-20261123-100000.tcx"', r.getheader("Content-Disposition"))
+        self.assertIn(b"<ns3:Watts>210</ns3:Watts>", body)
+        minor = bikecomputer.__version__.split(".")[1]
+        self.assertIn(f"<VersionMinor>{minor}</VersionMinor>".encode(), body)
+
+    def test_tcx_only_for_existing_rides(self):
+        for path in ("/rides/ride-20991231-235959.tcx", "/rides/secret.tcx", "/rides/../ride.tcx"):
+            self.assertEqual(self.request("GET", path)[0].status, 404, path)
+
     def test_download_only_ride_files(self):
         for path in ("/rides/secret.txt", "/rides/../bikecomputer.py", "/rides/%2e%2e/ride.py",
                      "/rides/ride-20991231-235959.csv"):

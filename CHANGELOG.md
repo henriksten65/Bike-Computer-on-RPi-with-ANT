@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **TCX export**: a **TCX** button for each ride on the Rides page, for uploading to Strava,
+  Garmin Connect, intervals.icu, TrainingPeaks and others. It includes power, cadence and
+  heart rate, and is checked against Garmin's TCX schema.
+- Tests run on GitHub on every push (Python 3.10 to 3.13).
+
 ## 0.4.0 (2026-11-23)
 
 ### New

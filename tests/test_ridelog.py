@@ -3,7 +3,9 @@
 import csv
 import os
 import tempfile
+import time
 import unittest
+import xml.etree.ElementTree as ET
 
 import ridelog
 from ridelog import CsvLogger, list_rides, summarize
@@ -116,3 +118,92 @@ class SummaryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TcxTest(unittest.TestCase):
+    NS = {"t": "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2",
+          "x": "http://www.garmin.com/xmlschemas/ActivityExtension/v2"}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        # CSV times are the Pi's local time; pin the zone so the UTC result is known.
+        self.old_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "Europe/Stockholm"
+        time.tzset()
+
+    def tearDown(self):
+        if self.old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = self.old_tz
+        time.tzset()
+        self.tmp.cleanup()
+
+    def tcx(self, rows, header=ridelog.COLUMNS):
+        path = os.path.join(self.tmp.name, "ride-20260701-100000.csv")
+        with open(path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(header)
+            w.writerows(rows)
+        return ET.fromstring(ridelog.to_tcx(path, "0.4.0"))
+
+    def test_trackpoints_and_lap(self):
+        doc = self.tcx([["2026-07-01T10:00:00", 1, 200, 100, 100, 90, 140],
+                        ["2026-07-01T10:00:01", 2, 300, 150, 150, 92, 142]])
+        tps = doc.findall(".//t:Trackpoint", self.NS)
+        self.assertEqual(len(tps), 2)
+        # 10:00 summer time in Stockholm is 08:00 UTC
+        self.assertEqual(tps[0].find("t:Time", self.NS).text, "2026-07-01T08:00:00Z")
+        self.assertEqual(tps[1].find("t:HeartRateBpm/t:Value", self.NS).text, "142")
+        self.assertEqual(tps[1].find("t:Cadence", self.NS).text, "92")
+        self.assertEqual(tps[1].find(".//x:Watts", self.NS).text, "300")
+        act = doc.find(".//t:Activity", self.NS)
+        self.assertEqual(act.get("Sport"), "Biking")
+        self.assertEqual(act.find("t:Id", self.NS).text, "2026-07-01T08:00:00Z")
+        lap = act.find("t:Lap", self.NS)
+        self.assertEqual(lap.get("StartTime"), "2026-07-01T08:00:00Z")
+        self.assertEqual(lap.find("t:TotalTimeSeconds", self.NS).text, "2")
+        self.assertEqual(lap.find("t:MaximumHeartRateBpm/t:Value", self.NS).text, "142")
+        self.assertEqual(lap.find(".//x:AvgWatts", self.NS).text, "250")
+        self.assertEqual(lap.find(".//x:MaxWatts", self.NS).text, "300")
+        self.assertEqual(act.find("t:Creator/t:Name", self.NS).text, "Bike computer")
+        self.assertEqual(act.find("t:Creator/t:Version/t:VersionMinor", self.NS).text, "4")
+
+    def test_winter_time(self):
+        path = os.path.join(self.tmp.name, "ride-20261123-162208.csv")
+        with open(path, "w", newline="") as f:
+            f.write("time_iso,elapsed_s,power_w,left_w,right_w,cadence_rpm\n2026-11-23T16:22:08,1.0,36,,,21\n")
+        doc = ET.fromstring(ridelog.to_tcx(path))
+        self.assertEqual(doc.find(".//t:Trackpoint/t:Time", self.NS).text, "2026-11-23T15:22:08Z")
+
+    def test_missing_values_are_left_out(self):
+        doc = self.tcx([["2026-07-01T10:00:00", 1, 200, "", "", "", ""]])
+        tp = doc.find(".//t:Trackpoint", self.NS)
+        self.assertIsNone(tp.find("t:HeartRateBpm", self.NS))
+        self.assertIsNone(tp.find("t:Cadence", self.NS))
+        lap = doc.find(".//t:Lap", self.NS)
+        self.assertIsNone(lap.find("t:AverageHeartRateBpm", self.NS))
+        self.assertIsNone(lap.find("t:Cadence", self.NS))
+
+    def test_old_files_without_heart_rate_column(self):
+        old = ["time_iso", "elapsed_s", "power_w", "left_w", "right_w", "cadence_rpm"]
+        doc = self.tcx([["2026-07-01T10:00:00", 1, 150, 75, 75, 80]], header=old)
+        self.assertEqual(len(doc.findall(".//t:Trackpoint", self.NS)), 1)
+
+    def test_cadence_is_capped_at_tcx_limit(self):
+        doc = self.tcx([["2026-07-01T10:00:00", 1, 200, "", "", 300, ""]])
+        self.assertEqual(doc.find(".//t:Trackpoint/t:Cadence", self.NS).text, "254")
+
+    def test_element_order_follows_the_schema(self):
+        doc = self.tcx([["2026-07-01T10:00:00", 1, 200, 100, 100, 90, 140]])
+        lap = doc.find(".//t:Lap", self.NS)
+        names = [e.tag.split("}")[1] for e in lap]
+        self.assertEqual(names, ["TotalTimeSeconds", "DistanceMeters", "Calories", "AverageHeartRateBpm",
+                                 "MaximumHeartRateBpm", "Intensity", "Cadence", "TriggerMethod",
+                                 "Track", "Extensions"])
+        tp = doc.find(".//t:Trackpoint", self.NS)
+        self.assertEqual([e.tag.split("}")[1] for e in tp], ["Time", "HeartRateBpm", "Cadence", "Extensions"])
+
+    def test_empty_ride_cannot_be_exported(self):
+        with self.assertRaises(ValueError):
+            self.tcx([])

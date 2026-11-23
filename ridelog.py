@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ride import clock, normalized_power
 
@@ -14,6 +14,7 @@ log = logging.getLogger("ridelog")
 COLUMNS = ["time_iso", "elapsed_s", "power_w", "left_w", "right_w", "cadence_rpm", "heart_rate_bpm"]
 # Ride file names; anything else in the folder is never listed, served or deleted.
 NAME_RE = re.compile(r"^ride-(\d{8})-(\d{6})\.csv$")
+TCX_NAME_RE = re.compile(r"^(ride-\d{8}-\d{6})\.tcx$")
 
 
 class CsvLogger:
@@ -163,3 +164,91 @@ def list_rides(directory, current=None):
                     "in_progress": current is not None and os.path.abspath(path) == os.path.abspath(current),
                     **summary})
     return out
+
+
+# --------------------------------------------------------------------------- TCX export
+
+def _utc(time_iso):
+    """CSV time (the Pi's local time, no zone) -> TCX time in UTC."""
+    local = datetime.fromisoformat(time_iso).astimezone()   # naive = local time
+    return local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _int_or_none(v, lo, hi):
+    n = _num(v)
+    if n is None:
+        return None
+    return max(lo, min(hi, round(n)))
+
+
+def to_tcx(path, version="0.0.0"):
+    """Convert a saved ride (CSV) to TCX for Strava, Garmin Connect, intervals.icu, ...
+
+    One lap, one trackpoint per second of moving time with power, cadence and
+    heart rate. No GPS or distance: the uploader treats it as an indoor ride.
+    Pauses aren't in the file, so they show up as gaps in the time.
+    """
+    points = []
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f):
+            if _num(row.get("power_w")) is None or not row.get("time_iso"):
+                continue
+            try:
+                t = _utc(row["time_iso"])
+            except ValueError:
+                continue
+            points.append((t,
+                           _int_or_none(row.get("power_w"), 0, 65535),
+                           _int_or_none(row.get("cadence_rpm"), 0, 254),       # TCX limit
+                           _int_or_none(row.get("heart_rate_bpm"), 1, 255)))
+    if not points:
+        raise ValueError("the ride has no data")
+
+    st = summarize(path)
+    start = points[0][0]
+    out = ['<?xml version="1.0" encoding="UTF-8"?>',
+           '<TrainingCenterDatabase'
+           ' xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"'
+           ' xmlns:ns3="http://www.garmin.com/xmlschemas/ActivityExtension/v2"'
+           ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
+           '<Activities>',
+           '<Activity Sport="Biking">',
+           f'<Id>{start}</Id>',
+           f'<Lap StartTime="{start}">',
+           f'<TotalTimeSeconds>{len(points)}</TotalTimeSeconds>',
+           '<DistanceMeters>0</DistanceMeters>',
+           # On the bike, kJ of work is about the same number as kcal burned.
+           f'<Calories>{round(st["kj"])}</Calories>']
+    if st["avg_hr"] is not None:
+        out.append(f'<AverageHeartRateBpm><Value>{st["avg_hr"]}</Value></AverageHeartRateBpm>')
+        out.append(f'<MaximumHeartRateBpm><Value>{st["max_hr"]}</Value></MaximumHeartRateBpm>')
+    out.append('<Intensity>Active</Intensity>')
+    if st["avg_c"] is not None:
+        out.append(f'<Cadence>{min(254, st["avg_c"])}</Cadence>')
+    out.append('<TriggerMethod>Manual</TriggerMethod>')
+    out.append('<Track>')
+    for t, p, c, h in points:
+        tp = [f'<Trackpoint><Time>{t}</Time>']
+        if h is not None:
+            tp.append(f'<HeartRateBpm><Value>{h}</Value></HeartRateBpm>')
+        if c is not None:
+            tp.append(f'<Cadence>{c}</Cadence>')
+        tp.append(f'<Extensions><ns3:TPX><ns3:Watts>{p}</ns3:Watts></ns3:TPX></Extensions></Trackpoint>')
+        out.append("".join(tp))
+    out.append('</Track>')
+    out.append('<Extensions><ns3:LX>'
+               f'<ns3:AvgWatts>{st["avg_p"]}</ns3:AvgWatts>'
+               f'<ns3:MaxWatts>{st["max_p"]}</ns3:MaxWatts>'
+               '</ns3:LX></Extensions>')
+    out.append('</Lap>')
+    # The recording device, shown by Strava and others as "Bike computer".
+    major, minor, *_ = (version.split(".") + ["0", "0"])
+    out.append('<Creator xsi:type="Device_t"><Name>Bike computer</Name>'
+               '<UnitId>0</UnitId><ProductID>0</ProductID>'
+               f'<Version><VersionMajor>{int(major)}</VersionMajor><VersionMinor>{int(minor)}</VersionMinor></Version>'
+               '</Creator>')
+    out.append('</Activity>')
+    out.append('</Activities>')
+    out.append('</TrainingCenterDatabase>')
+    return ("\n".join(out) + "\n").encode("utf-8")
+

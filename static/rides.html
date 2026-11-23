@@ -78,7 +78,8 @@
   </header>
 
   <div id="list"><p class="empty">Loading…</p></div>
-  <p class="note">Only the newest rides are kept (10 by default). Download the ones you want to keep.</p>
+  <p class="note">Only the newest rides are kept (10 by default). Download the ones you want to keep.
+    <b>TCX</b> uploads to Strava, Garmin Connect, intervals.icu and most other training sites; <b>CSV</b> opens in a spreadsheet.</p>
 
   <h2>Raspberry Pi</h2>
   <div class="power">
@@ -116,7 +117,8 @@
           <div class="ride-head">
             <span class="when">${esc(fmtWhen(x.start, x.name))}</span>
             ${x.in_progress ? `<span class="badge">In progress</span>` : ""}
-            <a class="btn" href="/rides/${encodeURIComponent(x.name)}" download>Download CSV</a>
+            ${x.moving_s > 0 ? `<a class="btn" href="/rides/${encodeURIComponent(x.name.replace(/\.csv$/, ".tcx"))}" download title="For Strava, Garmin Connect, intervals.icu, …">TCX</a>` : ""}
+            <a class="btn" href="/rides/${encodeURIComponent(x.name)}" download>CSV</a>
           </div>
           <div class="grid">
             ${stat("Moving time", fmtDur(x.moving_s))}

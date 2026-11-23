@@ -28,7 +28,8 @@ heart rate strap ──ANT+───────► USB stick ──────
 - **Ride stats**: average, normalized (NP) and max power, average L/R balance, average cadence,
   average and max heart rate, and work (kJ)
 - **One CSV file per ride**, saved in `rides/` (the newest 10 are kept)
-- **Ride list** at `/rides`: past rides with their stats and a CSV download for each
+- **Ride list** at `/rides`: past rides with their stats, and downloads as **TCX** (upload to
+  Strava, Garmin Connect, intervals.icu, TrainingPeaks, …) or **CSV** (for a spreadsheet)
 - **Power off and restart buttons** on the ride list page, so you can shut the Pi down safely
   without a keyboard or SSH
 - Clear status messages when something is wrong, for example "ANT+ stick not found". The
@@ -136,6 +137,17 @@ Empty values mean the meter didn't send them (no balance, no strap). A new file 
 **Reset** and whenever the program starts. Only the newest 10 are kept, so download the ones
 you want to keep from the **Rides** page.
 
+### Uploading to Strava and other sites
+
+On the **Rides** page, tap **TCX** next to a ride and upload the file:
+
+- **Strava:** the **+** button, then **Upload activity**, then **File** (on the website)
+- **Garmin Connect:** **Import Data** (on the website)
+- **intervals.icu** and **TrainingPeaks:** drag the file onto the upload area
+
+The file has power, cadence and heart rate for every second of moving time, in UTC. It has no
+GPS or distance, so the sites treat it as an indoor ride. Pauses show up as gaps.
+
 The Pi has no battery-backed clock. Without internet at boot its time can be wrong, so the
 dashboard sends the phone's time and the Pi uses that for file names and timestamps.
 
@@ -202,7 +214,7 @@ On older Raspberry Pi OS versions the command is `chromium-browser`.
 | `bikecomputer.py` | Main program: web server, live updates, power off |
 | `sources.py` | Data sources: ANT+ (power and heart rate), Bluetooth LE and the simulator |
 | `ride.py` | Ride state: 1-second samples, moving time, stats and normalized power |
-| `ridelog.py` | Ride CSV files: writing, keeping the newest 10, and reading them back for the ride list |
+| `ridelog.py` | Ride CSV files: writing, keeping the newest 10, reading them back for the ride list, and TCX export |
 | `static/index.html` | The dashboard |
 | `static/rides.html` | The ride list, with downloads and the power off button |
 | `deploy/` | Install script, systemd service template and udev rule for the Pi |

@@ -95,6 +95,15 @@ def make_handler(ride, hub, log_dir):
             self.end_headers()
             self.wfile.write(body)
 
+        def _download(self, name, body, ctype):
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
         def _page(self, name):
             with open(os.path.join(HERE, "static", name), "rb") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")
@@ -117,13 +126,19 @@ def make_handler(ride, hub, log_dir):
                 except FileNotFoundError:
                     self._send(404, b"not found", "text/plain")
                     return
-                self.send_response(200)
-                self.send_header("Content-Type", "text/csv; charset=utf-8")
-                self.send_header("Content-Disposition", f'attachment; filename="{name}"')
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(body)
+                self._download(name, body, "text/csv; charset=utf-8")
+            elif path.startswith("/rides/") and ridelog.TCX_NAME_RE.match(path[len("/rides/"):]):
+                name = path[len("/rides/"):]
+                csv_path = os.path.join(log_dir, ridelog.TCX_NAME_RE.match(name).group(1) + ".csv")
+                try:
+                    body = ridelog.to_tcx(csv_path, __version__)
+                except FileNotFoundError:
+                    self._send(404, b"not found", "text/plain")
+                    return
+                except ValueError as e:      # empty ride
+                    self._send(409, f"Can't export this ride: {e}".encode(), "text/plain; charset=utf-8")
+                    return
+                self._download(name, body, "application/vnd.garmin.tcx+xml")
             elif path == "/api/history":
                 self._send(200, json.dumps(ride.snapshot()).encode(), "application/json")
             elif path == "/events":
