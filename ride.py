@@ -8,8 +8,9 @@ from typing import Optional
 
 # If nothing new arrives from the meter for this long we treat the rider as stopped.
 STALE_AFTER_S = 3.0
-# Keep this many 1 s samples in memory so a reloaded page can redraw the graph (2 h).
-HISTORY_LEN = 2 * 60 * 60
+# Keep this many 1 s samples in memory so a reloaded page can redraw the graph (12 h:
+# the whole ride; a few MB at most).
+HISTORY_LEN = 12 * 60 * 60
 # Normalized power uses a rolling average over this many seconds of riding.
 NP_WINDOW_S = 30
 # Heart rate older than this is treated as "no heart rate".
@@ -30,6 +31,8 @@ class WallClock:
         self.offset = 0.0
         self._lock = threading.Lock()
         self._base = self._system_base()
+        # How far times reported so far were off, for fixing the open ride file.
+        self._shift = 0.0
 
     @staticmethod
     def _system_base():
@@ -39,7 +42,9 @@ class WallClock:
     def _check_system_jump(self):
         base = self._system_base()
         if abs(base - self._base) > CLOCK_TOLERANCE_S:
-            # The system clock was set (internet came up); trust it again.
+            # The system clock was set (internet came up); trust it again. Times so far
+            # were (old system time + offset); the right time was (old system time + jump).
+            self._shift += (base - self._base) - self.offset
             self._base = base
             self.offset = 0.0
 
@@ -56,8 +61,16 @@ class WallClock:
             new = diff if abs(diff) > CLOCK_TOLERANCE_S else 0.0
             if abs(new - self.offset) <= CLOCK_TOLERANCE_S:
                 return False
+            self._shift += new - self.offset
             self.offset = new
             return True
+
+    def pop_shift(self) -> float:
+        """Seconds to add to times reported since the last call (0 if none were off)."""
+        with self._lock:
+            self._check_system_jump()
+            shift, self._shift = self._shift, 0.0
+            return shift
 
 
 clock = WallClock()
@@ -134,6 +147,8 @@ class Totals:
         self.seconds = 0
         self.sum_power = self.sum_left = self.sum_right = 0.0
         self.sum_cadence = 0.0
+        self.n_cadence = 0           # seconds with cadence > 0 (coasting doesn't count)
+        self.zone_s = [0] * len(ZONES)   # seconds in each power zone (with an FTP set)
         self.max_power = 0
         self.energy_j = 0.0
         self.sum_hr = 0.0
@@ -143,10 +158,15 @@ class Totals:
         self._np_sum4 = 0.0                        # sum of (30 s average) ** 4
         self._np_n = 0
 
-    def add(self, power, cadence, left, right, hr, dt=1.0):
+    def add(self, power, cadence, left, right, hr, dt=1.0, ftp=None):
         self.seconds += 1
         self.sum_power += power
-        self.sum_cadence += cadence or 0
+        if cadence:
+            self.sum_cadence += cadence
+            self.n_cadence += 1
+        z = zone(power, ftp)
+        if z:
+            self.zone_s[z - 1] += 1
         self.sum_left += left or 0
         self.sum_right += right or 0
         self.max_power = max(self.max_power, power)
@@ -172,7 +192,7 @@ class Totals:
             "avg_p": round(self.sum_power / n),
             "avg_l": round(self.sum_left / n),
             "avg_r": round(self.sum_right / n),
-            "avg_c": round(self.sum_cadence / n),
+            "avg_c": round(self.sum_cadence / self.n_cadence) if self.n_cadence else None,
             "max_p": round(self.max_power),
             "np": np_w,
             "if": intensity_factor(np_w, ftp),
@@ -180,6 +200,7 @@ class Totals:
             "avg_hr": round(self.sum_hr / self.n_hr) if self.n_hr else None,
             "max_hr": self.max_hr or None,
             "kj": round(self.energy_j / 1000, 1),
+            "zones": list(self.zone_s) if any(self.zone_s) else None,
             "elapsed": float(self.seconds),
             "start_t": round(self.start_t, 1),
         }
@@ -253,6 +274,14 @@ class Ride:
         """Called once per second. Returns the sample for this second."""
         now = time.monotonic()
         with self._lock:
+            shift = clock.pop_shift()
+            if shift:
+                if self.started_wall is not None:
+                    self.started_wall += shift
+                for h in self.history:
+                    h["wall"] += shift
+                if self.logger:
+                    self.logger.shift_times(shift)
             bucket, self._bucket = self._bucket, []
             last = self._last_reading
             connected = last is not None and (now - last.ts) < STALE_AFTER_S
@@ -287,8 +316,8 @@ class Ride:
                 if self.started_wall is None:
                     self.started_wall = clock.now()
                 self.elapsed += dt
-                self.total.add(power, cadence, left, right, hr, dt)
-                self.lap.add(power, cadence, left, right, hr, dt)
+                self.total.add(power, cadence, left, right, hr, dt, self.ftp)
+                self.lap.add(power, cadence, left, right, hr, dt, self.ftp)
 
             sample = {
                 "t": round(self.elapsed, 1),
@@ -307,7 +336,7 @@ class Ride:
                 if len(self.history) > HISTORY_LEN:
                     del self.history[: len(self.history) - HISTORY_LEN]
                 if self.logger:
-                    self.logger.write(sample)
+                    self.logger.write(sample, ftp=self.ftp)
 
             sample["connected"] = connected
             sample["source"] = self.source_status

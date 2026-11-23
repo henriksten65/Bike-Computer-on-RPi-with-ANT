@@ -6,6 +6,8 @@ import tempfile
 import time
 import unittest
 import xml.etree.ElementTree as ET
+from datetime import datetime
+from unittest import mock
 
 import ridelog
 from ridelog import CsvLogger, list_rides, summarize
@@ -26,14 +28,15 @@ class CsvLoggerTest(unittest.TestCase):
 
     def test_writes_header_and_rows(self):
         lg = CsvLogger(self.dir)
-        lg.write(sample(1, h=140))
+        lg.write(sample(1, h=140), ftp=250)
         lg.write(sample(2))
         lg.new_file()
         with open(lg.path, newline="") as f:
             rows = list(csv.reader(f))
         self.assertEqual(rows[0], ridelog.COLUMNS)
-        self.assertEqual(rows[1][1:], ["1", "200", "100", "100", "90", "140", "1"])
-        self.assertEqual(rows[2][-2], "")      # no heart rate
+        self.assertEqual(rows[1][1:], ["1", "200", "100", "100", "90", "140", "1", "250"])
+        self.assertEqual(rows[2][-3], "")      # no heart rate
+        self.assertEqual(rows[2][-1], "")      # no FTP set
 
     def test_keeps_only_newest_rides_and_leaves_other_files(self):
         for d in range(10, 22):
@@ -248,3 +251,68 @@ class LapsInFilesTest(TcxBase):
         self.assertEqual((ride["np"], ride["if"], ride["tss"]), (200, 0.8, 32))   # 30 min at IF 0.8
         ride = list_rides(self.tmp.name)[0]
         self.assertEqual((ride["if"], ride["tss"]), (None, None))
+
+
+class FtpInFilesTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write(self, rows, header=ridelog.COLUMNS):
+        path = os.path.join(self.tmp.name, "ride-20260701-100000.csv")
+        with open(path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(header)
+            w.writerows(rows)
+        return path
+
+    def test_ride_keeps_its_own_ftp(self):
+        self.write([["2026-07-01T10:00:00", i + 1, 200, "", "", 90, "", 1, 250] for i in range(1800)])
+        ride = list_rides(self.tmp.name, ftp=300)[0]        # the current FTP is ignored
+        self.assertEqual((ride["ftp"], ride["ftp_saved"], ride["if"], ride["tss"]), (250, True, 0.8, 32))
+        self.assertEqual(ride["zones"], [0, 0, 1800, 0, 0, 0, 0])    # 200 W = 80 % of 250: Z3
+
+    def test_old_files_use_the_current_ftp(self):
+        old = ridelog.COLUMNS[:-1]
+        self.write([["2026-07-01T10:00:00", i + 1, 200, "", "", 90, "", 1] for i in range(60)], header=old)
+        ride = list_rides(self.tmp.name, ftp=250)[0]
+        self.assertEqual((ride["ftp"], ride["ftp_saved"]), (250, False))
+        ride = list_rides(self.tmp.name)[0]
+        self.assertEqual((ride["ftp"], ride["zones"], ride["if"]), (None, None, None))
+
+    def test_average_cadence_leaves_out_coasting(self):
+        path = self.write([["2026-07-01T10:00:00", 1, 200, "", "", 90, "", 1, ""],
+                           ["2026-07-01T10:00:01", 2, 50, "", "", 0, "", 1, ""]])
+        self.assertEqual(summarize(path)["avg_c"], 90)
+
+
+class ShiftTimesTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_rows_and_name_are_corrected(self):
+        lg = CsvLogger(self.tmp.name)
+        wall = datetime(2026, 1, 1, 10, 0, 0).timestamp()     # the Pi thought it was 1 January
+        with mock.patch("ridelog.clock.now", return_value=wall):
+            lg.write(sample(1, wall=wall - 1))
+            lg.write(sample(2, wall=wall - 1))
+        self.assertTrue(os.path.basename(lg.path).startswith("ride-20260101-10"))
+        lg.shift_times(86400)                                  # it was really 2 January
+        lg.write(sample(3, wall=wall - 1 + 86400))
+        lg.new_file()
+        names = os.listdir(self.tmp.name)
+        self.assertEqual(names, [os.path.basename(lg.path)])
+        self.assertTrue(names[0].startswith("ride-20260102-10"), names)
+        with open(lg.path, newline="") as f:
+            rows = list(csv.reader(f))
+        self.assertEqual([r[0] for r in rows[1:]],
+                         ["2026-01-02T10:00:00", "2026-01-02T10:00:01", "2026-01-02T10:00:02"])
+
+    def test_no_open_file_is_fine(self):
+        CsvLogger(self.tmp.name).shift_times(3600)
+        self.assertEqual(os.listdir(self.tmp.name), [])

@@ -7,11 +7,11 @@ import re
 import time
 from datetime import datetime, timezone
 
-from ride import clock, intensity_factor, normalized_power, training_stress
+from ride import ZONES, clock, intensity_factor, normalized_power, training_stress, zone
 
 log = logging.getLogger("ridelog")
 
-COLUMNS = ["time_iso", "elapsed_s", "power_w", "left_w", "right_w", "cadence_rpm", "heart_rate_bpm", "lap"]
+COLUMNS = ["time_iso", "elapsed_s", "power_w", "left_w", "right_w", "cadence_rpm", "heart_rate_bpm", "lap", "ftp_w"]
 # Ride file names; anything else in the folder is never listed, served or deleted.
 NAME_RE = re.compile(r"^ride-(\d{8})-(\d{6})\.csv$")
 TCX_NAME_RE = re.compile(r"^(ride-\d{8}-\d{6})\.tcx$")
@@ -57,7 +57,7 @@ class CsvLogger:
                 pass
             self.f = None
 
-    def write(self, s):
+    def write(self, s, ftp=None):
         try:
             if self.f is None:
                 os.makedirs(self.dir, exist_ok=True)
@@ -69,7 +69,7 @@ class CsvLogger:
                 log.info("Logging ride to %s", self.path)
                 self._prune()
             self.w.writerow([datetime.fromtimestamp(s["wall"]).isoformat(timespec="seconds"),
-                             s["t"], s["p"], s["l"], s["r"], s["c"], s.get("h"), s.get("lap")])
+                             s["t"], s["p"], s["l"], s["r"], s["c"], s.get("h"), s.get("lap"), ftp])
             self.f.flush()
             if self.error:
                 log.info("Saving the ride works again")
@@ -80,19 +80,43 @@ class CsvLogger:
             self.error = f"Can't save the ride: {e.strerror or e}"
             self.new_file()   # start over with a fresh file next time
 
-    def clock_corrected(self):
-        """Rename the open ride file so its name uses the corrected time."""
-        if self.f is None:
+    def shift_times(self, shift):
+        """Fix the open ride file after the clock was corrected by `shift` seconds.
+
+        Rows already written get the corrected time, and the file is renamed to
+        match. Called from the update loop, so it never runs during a write.
+        """
+        if self.f is None or not shift:
             return
-        new = self._name(clock.now() - (time.monotonic() - self._opened_mono))
-        if new != self.path:
-            try:
-                os.rename(self.path, new)
-                log.info("Renamed %s to %s after the clock was corrected",
-                         os.path.basename(self.path), os.path.basename(new))
-                self.path = new
-            except OSError as e:
-                log.warning("Could not rename %s: %s", self.path, e)
+        old = self.path
+        try:
+            self.f.close()
+            self.f = None
+            with open(old, newline="") as f:
+                rows = list(csv.reader(f))
+            for row in rows[1:]:
+                try:
+                    t = datetime.fromisoformat(row[0]).timestamp() + shift
+                    row[0] = datetime.fromtimestamp(t).isoformat(timespec="seconds")
+                except (ValueError, IndexError):
+                    pass
+            start = datetime.fromisoformat(rows[1][0]).timestamp() if len(rows) > 1 else clock.now()
+            new = self._name(start)
+            tmp = new + ".tmp"
+            with open(tmp, "w", newline="") as f:
+                csv.writer(f).writerows(rows)
+            os.replace(tmp, new)
+            if new != old:
+                os.remove(old)
+            self.path = new
+            self.f = open(new, "a", newline="")
+            self.w = csv.writer(self.f)
+            log.info("Clock corrected by %+.0f s: times in %s fixed%s", shift, os.path.basename(new),
+                     f" (was {os.path.basename(old)})" if new != old else "")
+        except (OSError, ValueError, IndexError) as e:
+            log.warning("Could not fix the times in %s: %s", old, e)
+            self.new_file()
+            self.f = None
 
 
 def _num(v):
@@ -102,11 +126,17 @@ def _num(v):
         return None
 
 
-def summarize(path):
-    """Stats for one saved ride file (only moving seconds are in the file)."""
+def summarize(path, ftp=None):
+    """Stats for one saved ride file (only moving seconds are in the file).
+
+    Uses the FTP saved in the file (since 0.7); `ftp` is the fallback for older
+    files without one.
+    """
     powers, cads, hrs, lefts, rights = [], [], [], [], []
     first = last_elapsed = None
     laps = 1
+    file_ftp = None
+    zone_s = [0] * len(ZONES)
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
             p = _num(row.get("power_w"))
@@ -116,6 +146,12 @@ def summarize(path):
             last_elapsed = _num(row.get("elapsed_s"))
             powers.append(p)
             laps = max(laps, int(_num(row.get("lap")) or 1))
+            row_ftp = _num(row.get("ftp_w"))
+            if row_ftp:
+                file_ftp = round(row_ftp)
+            z = zone(p, row_ftp or ftp)
+            if z:
+                zone_s[z - 1] += 1
             for lst, key in ((cads, "cadence_rpm"), (hrs, "heart_rate_bpm"),
                              (lefts, "left_w"), (rights, "right_w")):
                 v = _num(row.get(key))
@@ -123,6 +159,7 @@ def summarize(path):
                     lst.append(v)
     n = len(powers)
     avg = lambda xs: round(sum(xs) / len(xs)) if xs else None
+    cads = [c for c in cads if c > 0]          # coasting doesn't count
     bal = sum(lefts) + sum(rights)
     return {
         "start": first,
@@ -136,17 +173,20 @@ def summarize(path):
         "balance_l": round(100 * sum(lefts) / bal) if bal > 0 else None,
         "kj": round(sum(powers) / 1000, 1),   # 1 s samples: W x 1 s = J
         "laps": laps,
+        "ftp": file_ftp or ftp,
+        "ftp_saved": file_ftp is not None,     # False: the current FTP was used
+        "zones": zone_s if any(zone_s) else None,
     }
 
 
-_cache = {}   # path -> ((mtime, size), summary)
+_cache = {}   # path -> ((mtime, size, fallback ftp), summary)
 
 
 def list_rides(directory, current=None, ftp=None):
     """All saved rides, newest first, with stats. `current` = path being written now.
 
-    IF and TSS use the FTP given here (the current setting): the files don't
-    record what the FTP was on the day.
+    IF, TSS and zones use the FTP saved in each file; `ftp` (the current
+    setting) is used only for files from before 0.7, which don't have one.
     """
     try:
         names = [n for n in os.listdir(directory) if NAME_RE.match(n)]
@@ -157,12 +197,12 @@ def list_rides(directory, current=None, ftp=None):
         path = os.path.join(directory, name)
         try:
             st = os.stat(path)
-            key = (st.st_mtime, st.st_size)
+            key = (st.st_mtime, st.st_size, ftp)
             cached = _cache.get(path)
             if cached and cached[0] == key:
                 summary = cached[1]
             else:
-                summary = summarize(path)
+                summary = summarize(path, ftp)
                 _cache[path] = (key, summary)
         except (OSError, csv.Error, UnicodeDecodeError) as e:
             log.warning("Could not read %s: %s", name, e)
@@ -170,8 +210,8 @@ def list_rides(directory, current=None, ftp=None):
         out.append({"name": name, "size": st.st_size,
                     "in_progress": current is not None and os.path.abspath(path) == os.path.abspath(current),
                     **summary,
-                    "if": intensity_factor(summary["np"], ftp),
-                    "tss": training_stress(summary["moving_s"], summary["np"], ftp)})
+                    "if": intensity_factor(summary["np"], summary["ftp"]),
+                    "tss": training_stress(summary["moving_s"], summary["np"], summary["ftp"])})
     return out
 
 
@@ -193,7 +233,7 @@ def _int_or_none(v, lo, hi):
 def _lap_xml(points):
     """One TCX <Lap> for a list of (time, watts, cadence, hr) points."""
     watts = [p for _, p, _, _ in points]
-    cads = [c for _, _, c, _ in points if c is not None]
+    cads = [c for _, _, c, _ in points if c]          # coasting doesn't count
     hrs = [h for _, _, _, h in points if h is not None]
     out = [f'<Lap StartTime="{points[0][0]}">',
            f'<TotalTimeSeconds>{len(points)}</TotalTimeSeconds>',

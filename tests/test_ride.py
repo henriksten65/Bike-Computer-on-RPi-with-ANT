@@ -253,3 +253,57 @@ class LapTest(unittest.TestCase):
         r.reset()
         st = r.snapshot()["stats"]
         self.assertEqual((st["laps"], st["lap"]["n"]), ([], 1))
+
+
+class CadenceAndZonesTest(unittest.TestCase):
+    def test_average_cadence_leaves_out_coasting(self):
+        r = Ride()
+        for cad in (90, 90, 0, 0):                     # 2 s pedalling, 2 s coasting at 100 W
+            r.add(Reading(power=100, cadence=cad))
+            st = r.tick(1.0)["stats"]
+        self.assertEqual(st["avg_c"], 90)
+
+    def test_no_cadence_at_all(self):
+        r = Ride()
+        r.add(Reading(power=100))
+        self.assertIsNone(r.tick(1.0)["stats"]["avg_c"])
+
+    def test_time_in_zones(self):
+        r = Ride(ftp=200)
+        st = ride_through(r, [100] * 3 + [200] * 2 + [400])["stats"]
+        self.assertEqual(st["zones"], [3, 0, 0, 2, 0, 0, 1])
+        self.assertEqual(st["lap"]["zones"], [3, 0, 0, 2, 0, 0, 1])
+
+    def test_no_zones_without_ftp(self):
+        self.assertIsNone(ride_through(Ride(), [200] * 5)["stats"]["zones"])
+
+
+class ClockShiftTest(unittest.TestCase):
+    def test_browser_correction_is_reported_once(self):
+        c = WallClock()
+        c.correct(time.time() + 3600)
+        self.assertAlmostEqual(c.pop_shift(), 3600, delta=1)
+        self.assertEqual(c.pop_shift(), 0)
+        c.correct(time.time())                         # back to the system clock
+        self.assertAlmostEqual(c.pop_shift(), -3600, delta=1)
+
+    def test_system_clock_set_by_ntp(self):
+        c = WallClock()
+        real = time.time()
+        with mock.patch("ride.time.time", return_value=real + 7200):   # clock was 2 h behind
+            self.assertAlmostEqual(c.pop_shift(), 7200, delta=1)
+
+    def test_ntp_after_browser_correction(self):
+        c = WallClock()
+        c.correct(time.time() + 7200)                  # the phone already fixed it
+        c.pop_shift()
+        real = time.time()
+        with mock.patch("ride.time.time", return_value=real + 7200):
+            self.assertAlmostEqual(c.pop_shift(), 0, delta=1)
+
+    def test_tick_passes_the_shift_to_the_ride_file(self):
+        logger = mock.Mock(error=None)
+        r = Ride(logger=logger)
+        with mock.patch("ride.clock.pop_shift", return_value=120.0):
+            r.tick(1.0)
+        logger.shift_times.assert_called_once_with(120.0)

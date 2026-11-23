@@ -116,3 +116,24 @@ class BleTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BleHeartRateTest(unittest.TestCase):
+    def test_uint8_heart_rate(self):
+        self.assertEqual(sources.parse_heart_rate(bytes([0x00, 142])), 142)
+
+    def test_uint16_heart_rate(self):
+        self.assertEqual(sources.parse_heart_rate(bytes([0x01, 150, 0])), 150)
+
+    def test_extra_fields_are_ignored(self):
+        # flags: uint8 HR + energy expended + RR intervals
+        self.assertEqual(sources.parse_heart_rate(bytes([0x18, 130, 10, 0, 0x20, 0x03])), 130)
+
+    def test_invalid(self):
+        for data in (b"", bytes([0x00]), bytes([0x01, 150]), bytes([0x00, 0])):
+            self.assertIsNone(sources.parse_heart_rate(data), data)
+
+    def test_notify_feeds_the_ride(self):
+        ride = FakeRide()
+        sources.BleHeartRate(ride)._on_notify(None, bytearray([0x00, 99]))
+        self.assertEqual(ride.hr, [99])

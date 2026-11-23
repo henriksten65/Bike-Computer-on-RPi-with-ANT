@@ -297,6 +297,72 @@ class BleSource:
                               balance_pct=bal_pct, balance_side=bal_side, ts=now))
 
 
+# --------------------------------------------------------------------------- BLE heart rate
+
+HRS_SERVICE = "0000180d-0000-1000-8000-00805f9b34fb"
+HRS_MEASUREMENT = "00002a37-0000-1000-8000-00805f9b34fb"
+
+
+def parse_heart_rate(data):
+    """Bluetooth Heart Rate Measurement (0x2A37) -> bpm, or None.
+
+    Flags bit 0: 0 = heart rate is uint8, 1 = uint16.
+    """
+    if len(data) < 2:
+        return None
+    if data[0] & 0x01:
+        if len(data) < 3:
+            return None
+        bpm = data[1] | (data[2] << 8)
+    else:
+        bpm = data[1]
+    return bpm if 0 < bpm < 255 else None
+
+
+class BleHeartRate:
+    """Heart rate from a Bluetooth strap or watch (Heart Rate Service 0x180D).
+
+    Runs on its own, so it works with an ANT+ or a Bluetooth power meter.
+    """
+
+    def __init__(self, ride, name_filter=None):
+        self.ride = ride
+        self.name_filter = name_filter
+        self._found = False
+
+    def start(self):
+        threading.Thread(target=lambda: asyncio.run(self._run()), name="ble-hr", daemon=True).start()
+
+    async def _run(self):
+        from bleak import BleakClient, BleakScanner
+
+        def match(dev, adv):
+            if HRS_SERVICE not in [u.lower() for u in adv.service_uuids]:
+                return False
+            return not self.name_filter or self.name_filter.lower() in (dev.name or "").lower()
+
+        while True:
+            try:
+                dev = await BleakScanner.find_device_by_filter(match, timeout=20)
+                if dev is None:
+                    continue
+                log.info("BLE heart rate: connecting to %s (%s)", dev.name, dev.address)
+                disconnected = asyncio.Event()
+                async with BleakClient(dev, disconnected_callback=lambda c: disconnected.set()) as client:
+                    await client.start_notify(HRS_MEASUREMENT, self._on_notify)
+                    log.info("BLE heart rate: receiving data")
+                    await disconnected.wait()
+                log.warning("BLE heart rate: disconnected")
+            except Exception as e:
+                log.error("BLE heart rate error: %s: %s; retrying in 5 s", type(e).__name__, e)
+                await asyncio.sleep(5)
+
+    def _on_notify(self, _char, data: bytearray):
+        bpm = parse_heart_rate(bytes(data))
+        if bpm is not None:
+            self.ride.add_heart_rate(bpm)
+
+
 # --------------------------------------------------------------------------- simulator
 
 class SimSource:

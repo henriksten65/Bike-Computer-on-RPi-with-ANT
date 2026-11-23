@@ -19,6 +19,7 @@
     --series-total:  #199e70;   /* aqua  */
     --series-left:   #3987e5;   /* blue  */
     --series-right:  #d95926;   /* orange */
+    --series-hr:     #d6409f;   /* magenta */
     --ok:            #0ca30c;
     --warn:          #c98500;
     --bad:           #e5484d;
@@ -40,6 +41,7 @@
       --series-total:  #1baf7a;
       --series-left:   #2a78d6;
       --series-right:  #eb6834;
+      --series-hr:     #c22d8a;
       --ok:            #008300;
       --warn:          #b07000;
       --bad:           #c62a2f;
@@ -50,6 +52,7 @@
   :root[data-theme="dark"] { color-scheme: dark; }
 
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   html, body { height: 100%; margin: 0; }
   body {
     background: var(--bg);
@@ -127,9 +130,16 @@
   .chart { flex: 1; min-height: 220px; position: relative; padding: 10px 6px 6px 6px; display: flex; flex-direction: column; }
   .legend { display: flex; gap: 16px; font-size: 13px; color: var(--text-secondary); padding: 0 8px 6px; flex-wrap: wrap; }
   .legend .key { width: 14px; height: 3px; border-radius: 2px; vertical-align: 3px; }
-  .legend button { font: inherit; color: inherit; background: none; border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; cursor: pointer; }
-  .legend button[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
-  .legend button[aria-pressed="false"] .key { background: var(--text-muted) !important; }
+  .legend .grow { flex: 1; }
+  .legend .seg button { font-size: 13px; padding: 4px 10px; min-height: 30px; }
+  .legend > button { font: inherit; color: inherit; background: none; border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; cursor: pointer; }
+  .legend > button[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
+  .legend > button[aria-pressed="false"] .key { background: var(--text-muted) !important; }
+  .zonebar { font-size: 13px; color: var(--text-secondary); }
+  .zonebar .bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; gap: 1px; background: var(--surface-2); }
+  .zonebar .bar div { min-width: 2px; }
+  .zonebar .keys { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; }
+  .zonebar .keys span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--zc); margin-right: 5px; }
   .legend > span { padding: 3px 0; }
   .plot { position: relative; flex: 1; min-height: 0; }
   canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
@@ -153,16 +163,6 @@
 <body>
   <header>
     <div class="status"><span class="dot" id="dot"></span><span id="status">Connecting…</span></div>
-    <div class="seg" id="smooth" title="Smoothing for the numbers">
-      <button data-v="1" aria-pressed="false">1s</button>
-      <button data-v="3" aria-pressed="true">3s</button>
-    </div>
-    <div class="seg" id="win" title="Graph window">
-      <button data-v="60">1m</button>
-      <button data-v="300">5m</button>
-      <button data-v="600">10m</button>
-      <button data-v="0">All</button>
-    </div>
     <button class="btn lap" id="lap" title="Finish this lap and start the next">Lap</button>
     <button class="btn" id="reset">Reset</button>
     <a class="btn" href="/rides">Rides</a>
@@ -205,6 +205,7 @@
   </section>
 
   <section class="stats" id="stats" title="NP = normalized power: like the average, but weights hard efforts more. IF = NP ÷ FTP. TSS = training load: 100 = one hour at FTP."></section>
+  <section class="zonebar" id="zonebar" hidden></section>
   <section class="stats lapline" id="lapline"></section>
 
   <section class="tile chart">
@@ -212,6 +213,18 @@
       <span><span class="key" style="background:var(--series-total)"></span>Total</span>
       <button type="button" id="showL" title="Show or hide the left pedal line"><span class="key" style="background:var(--series-left)"></span>Left</button>
       <button type="button" id="showR" title="Show or hide the right pedal line"><span class="key" style="background:var(--series-right)"></span>Right</button>
+      <button type="button" id="showH" title="Show or hide the heart rate line (its own scale)" hidden><span class="key" style="background:var(--series-hr)"></span>HR</button>
+      <span class="grow"></span>
+      <div class="seg" id="smooth" title="Smoothing for the big numbers">
+        <button data-v="1" aria-pressed="false">1s</button>
+        <button data-v="3" aria-pressed="true">3s</button>
+      </div>
+      <div class="seg" id="win" title="Graph window">
+        <button data-v="60">1m</button>
+        <button data-v="300">5m</button>
+        <button data-v="600">10m</button>
+        <button data-v="0">All</button>
+      </div>
     </div>
     <div class="plot" id="plot">
       <canvas id="cv" aria-label="Power over time: total, left and right pedal"></canvas>
@@ -229,7 +242,7 @@
   let windowS = 300;
   let smoothS = 3;
   let hoverX = null;
-  let showL = true, showR = true;   // left/right pedal lines on the graph
+  let showL = true, showR = true, showH = true;   // left/right pedal and heart rate lines on the graph
 
   // ---------- persisted preferences (best effort)
   try {
@@ -237,6 +250,7 @@
     const s = localStorage.getItem("bc.smooth"); if (s !== null) smoothS = +s;
     showL = localStorage.getItem("bc.showL") !== "0";
     showR = localStorage.getItem("bc.showR") !== "0";
+    showH = localStorage.getItem("bc.showH") !== "0";
   } catch (e) {}
   function setupToggle(id, key, get, set) {
     const b = $(id);
@@ -246,6 +260,7 @@
   }
   setupToggle("showL", "bc.showL", () => showL, v => showL = v);
   setupToggle("showR", "bc.showR", () => showR, v => showR = v);
+  setupToggle("showH", "bc.showH", () => showH, v => showH = v);
   function setupSeg(id, get, set) {
     const btns = [...$(id).querySelectorAll("button")];
     const sync = () => btns.forEach(b => b.setAttribute("aria-pressed", String(+b.dataset.v === get())));
@@ -334,8 +349,23 @@
       `<span>Work <b>${st.kj ?? "—"} kJ</b></span>` +
       (ftp ? `<span>IF <b>${st.if != null ? st.if.toFixed(2) : "—"}</b></span><span>TSS <b>${st.tss ?? "—"}</b></span>` : "");
     renderLaps(st);
+    renderZones($("zonebar"), ftp ? st.zones : null);
+    $("showH").hidden = !$("tiles").classList.contains("has-hr");
 
     renderStatus();
+  }
+
+  // ---------- time in zones (same markup on the Rides page)
+  function renderZones(box, zones) {
+    const total = zones ? zones.reduce((a, b) => a + b, 0) : 0;
+    box.hidden = !total;
+    if (!total) return;
+    const names = ZONES.map(z => z[1]);
+    box.innerHTML = `<div class="bar" role="img" aria-label="Time in power zones">` +
+      zones.map((s, i) => s ? `<div style="flex:${s};background:var(--z${i + 1})" title="Z${i + 1} ${names[i]}: ${fmtTime(s)}"></div>` : "").join("") +
+      `</div><div class="keys">` +
+      zones.map((s, i) => s ? `<span style="--zc:var(--z${i + 1})">Z${i + 1} <b>${fmtTime(s)}</b> · ${Math.round(100 * s / total)}%</span>` : "").join("") +
+      `</div>`;
   }
 
   // ---------- laps
@@ -410,6 +440,22 @@
     return history.slice(i);
   }
 
+  // Average neighbouring samples so a long ride draws about one point per pixel.
+  // Returns [points, k] where k = seconds per point (for finding pauses).
+  function thin(data, maxPts) {
+    if (data.length <= maxPts) return [data, 1];
+    const k = Math.ceil(data.length / maxPts), out = [];
+    for (let i = 0; i < data.length; i += k) {
+      const chunk = data.slice(i, i + k), o = { t: chunk[0].t, lap: chunk[chunk.length - 1].lap };
+      for (const key of ["p", "l", "r", "c", "h"]) {
+        const v = chunk.map(d => d[key]).filter(x => x != null);
+        o[key] = v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+      }
+      out.push(o);
+    }
+    return [out, k];
+  }
+
   function niceStep(max) {
     const raw = max / 5, mag = Math.pow(10, Math.floor(Math.log10(raw)));
     for (const m of [1, 2, 2.5, 5, 10]) if (m * mag >= raw) return m * mag;
@@ -432,11 +478,15 @@
     const span = windowS || Math.max(60, tEnd - (data[0] ? data[0].t : 0));
     // Fill from the left until the ride is longer than the window, then scroll.
     const t0 = windowS ? Math.max(0, tEnd - windowS) : (data[0] ? data[0].t : 0);
-    const maxP = Math.max(300, ...data.map(s => s.p || 0));
+    let maxP = 300, maxH = 0;
+    for (const d of data) { if (d.p > maxP) maxP = d.p; if (d.h > maxH) maxH = d.h; }
     const step = niceStep(maxP * 1.08);
     const yMax = Math.ceil(maxP * 1.08 / step) * step;
     const x = t => PAD.l + (t - t0) / span * pw;
     const y = p => PAD.t + ph - (p / yMax) * ph;
+    // Heart rate gets its own scale: 40 bpm at the bottom, at least 200 at the top.
+    const hMin = 40, hMax = Math.max(200, Math.ceil((maxH + 10) / 10) * 10);
+    const yh = h => PAD.t + ph - ((h - hMin) / (hMax - hMin)) * ph;
 
     // power zone bands (faint), with Z labels on the left inside the plot
     const ftp = latest && latest.stats ? latest.stats.ftp : null;
@@ -472,7 +522,8 @@
     }
     // x labels (elapsed time)
     ctx.textAlign = "center"; ctx.textBaseline = "top";
-    const xStep = span <= 60 ? 15 : span <= 300 ? 60 : span <= 600 ? 120 : niceStep(span) ;
+    // Round time steps: about 4-8 labels, at 15 s, 1 min, ..., 1 h, 2 h.
+    const xStep = [15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200].find(st => span / st <= 8) || 7200;
     for (let t = Math.ceil(Math.max(0, t0) / xStep) * xStep; t <= tEnd; t += xStep) {
       ctx.fillText(fmtTime(t), x(t), PAD.t + ph + 6);
     }
@@ -500,23 +551,26 @@
     ctx.restore();
 
     // series, drawn back-to-front: left, right, then total on top
+    const hasHr = maxH > 0;
     const series = [
-      { k: "l", color: css("--series-left"),  name: "Left",  on: showL },
-      { k: "r", color: css("--series-right"), name: "Right", on: showR },
-      { k: "p", color: css("--series-total"), name: "Total", on: true },
+      { k: "h", color: css("--series-hr"),    name: "HR",    on: showH && hasHr, y: yh, unit: " bpm" },
+      { k: "l", color: css("--series-left"),  name: "Left",  on: showL, y },
+      { k: "r", color: css("--series-right"), name: "Right", on: showR, y },
+      { k: "p", color: css("--series-total"), name: "Total", on: true,  y },
     ].filter(s => s.on);
+    const [pts, k] = thin(data, Math.max(100, Math.round(pw * 1.5)));
     ctx.save();
     ctx.beginPath(); ctx.rect(PAD.l, PAD.t - 2, pw, ph + 4); ctx.clip();
     ctx.lineJoin = "round"; ctx.lineCap = "round";
     for (const s of series) {
-      ctx.strokeStyle = s.color; ctx.lineWidth = 2;
+      ctx.strokeStyle = s.color; ctx.lineWidth = s.k === "h" ? 1.5 : 2;
       ctx.beginPath();
       let pen = false, prevT = null;
-      for (const d of data) {
+      for (const d of pts) {
         const v = d[s.k];
         // break the line across gaps (pauses) and missing balance values
-        if (v == null || (prevT != null && d.t - prevT > 2.5)) { pen = false; }
-        if (v != null) { pen ? ctx.lineTo(x(d.t), y(v)) : ctx.moveTo(x(d.t), y(v)); pen = true; }
+        if (v == null || (prevT != null && d.t - prevT > 2.5 * k)) { pen = false; }
+        if (v != null) { pen ? ctx.lineTo(x(d.t), s.y(v)) : ctx.moveTo(x(d.t), s.y(v)); pen = true; }
         prevT = d.t;
       }
       ctx.stroke();
@@ -526,7 +580,7 @@
     // direct labels at the right end of each line (text ink, coloured key), de-collided
     const last = data[data.length - 1];
     const labels = series.filter(s => last[s.k] != null)
-      .map(s => ({ ...s, v: last[s.k], yy: y(last[s.k]) }))
+      .map(s => ({ ...s, v: last[s.k], yy: s.y(last[s.k]) }))
       .sort((a, b) => a.yy - b.yy);
     for (let i = 1; i < labels.length; i++)
       if (labels[i].yy - labels[i - 1].yy < 15) labels[i].yy = labels[i - 1].yy + 15;
@@ -535,7 +589,7 @@
       ctx.fillStyle = lb.color;
       ctx.fillRect(PAD.l + pw + 6, lb.yy - 1.5, 8, 3);
       ctx.fillStyle = css("--text-primary");
-      ctx.fillText(Math.round(lb.v), PAD.l + pw + 18, lb.yy);
+      ctx.fillText(Math.round(lb.v) + (lb.k === "h" ? "♥" : ""), PAD.l + pw + 18, lb.yy);
     }
 
     // hover / touch crosshair + tooltip
@@ -548,7 +602,7 @@
       ctx.beginPath(); ctx.moveTo(xx, PAD.t); ctx.lineTo(xx, PAD.t + ph); ctx.stroke();
       for (const s of series) {
         if (best[s.k] == null) continue;
-        ctx.beginPath(); ctx.arc(xx, y(best[s.k]), 4, 0, Math.PI * 2);
+        ctx.beginPath(); ctx.arc(xx, s.y(best[s.k]), 4, 0, Math.PI * 2);
         ctx.fillStyle = s.color; ctx.fill();
         ctx.lineWidth = 2; ctx.strokeStyle = css("--surface-1"); ctx.stroke();
       }
@@ -572,16 +626,34 @@
   cv.addEventListener("pointermove", setHover);
   cv.addEventListener("pointerdown", setHover);
   cv.addEventListener("pointerleave", () => { hoverX = null; render(); });
+  // On a touch screen there is no "leave": hide the tooltip when the finger lifts.
+  const endTouch = e => { if (e.pointerType !== "mouse") { hoverX = null; render(); } };
+  cv.addEventListener("pointerup", endTouch);
+  cv.addEventListener("pointercancel", endTouch);
   window.addEventListener("resize", render);
   matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", render);
 
   // ---------- data
+  const MAX_HISTORY = 12 * 3600;     // same as the server: the whole ride
+  let loading = false, pending = [];   // samples that arrive while the history loads
+
+  function addSample(m) {
+    // Skip samples the history already has (by moving time), so nothing is drawn twice.
+    const last = history[history.length - 1];
+    if (m.moving && (!last || m.t > last.t)) history.push({ t: m.t, p: m.p, l: m.l, r: m.r, c: m.c, h: m.h, lap: m.lap });
+    if (history.length > MAX_HISTORY) history.splice(0, history.length - MAX_HISTORY);
+  }
+
   async function loadHistory() {
+    loading = true; pending = [];
     try {
       const r = await fetch("/api/history");
-      const j = await r.json();
-      history = j.history || [];
+      const j = await r.json(), c = j.history || {};
+      history = (c.t || []).map((t, i) => ({ t, p: c.p[i], l: c.l[i], r: c.r[i], c: c.c[i], h: c.h[i], lap: c.lap[i] }));
     } catch (e) {}
+    loading = false;
+    pending.forEach(addSample);        // samples that arrived meanwhile, after the history
+    pending = [];
   }
 
   function connect() {
@@ -590,10 +662,9 @@
     es.onmessage = ev => {
       lastMsgAt = Date.now();
       const m = JSON.parse(ev.data);
-      if (m.type === "reset") { history = []; latest = null; $("tiles").classList.remove("has-hr"); render(); return; }
+      if (m.type === "reset") { history = []; pending = []; latest = null; $("tiles").classList.remove("has-hr"); render(); return; }
       latest = m;
-      if (m.moving) history.push({ t: m.t, p: m.p, l: m.l, r: m.r, c: m.c, h: m.h, lap: m.lap });
-      if (history.length > 7200) history.splice(0, history.length - 7200);
+      if (loading) pending.push(m); else addSample(m);
       render();
     };
     es.onerror = () => { linkDown = true; renderStatus(); };

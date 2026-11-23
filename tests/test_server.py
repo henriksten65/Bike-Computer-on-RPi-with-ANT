@@ -178,3 +178,99 @@ class TrainingEndpointsTest(ServerBase):
         with open(path, "w") as f:
             f.write("{not json")
         self.assertEqual(bikecomputer.load_settings(path), {})
+
+
+class PinTest(ServerBase):
+    def setUp(self):
+        if os.path.exists(self.settings):
+            os.remove(self.settings)
+        self.guard_reset()
+
+    def guard_reset(self):
+        # Reset the lockout between tests.
+        pins = self.server.RequestHandlerClass.pins
+        pins.failures, pins.locked_until = 0, 0.0
+
+    def post_pin(self, path, body, pin=None):
+        h = {"Content-Type": "application/json", "X-Bike-Computer": "1"}
+        if pin is not None:
+            h["X-PIN"] = pin
+        r, data = self.request("POST", path, body, h)
+        return r.status, json.loads(data or b"{}")
+
+    def test_no_pin_set(self):
+        self.assertEqual(self.post_pin("/api/settings", {"ftp": 200})[0], 200)
+        self.assertFalse(json.loads(self.request("GET", "/api/rides")[1])["pin_set"])
+
+    def test_set_pin_then_settings_need_it(self):
+        self.assertEqual(self.post_pin("/api/settings", {"pin": "1234"})[0], 200)
+        with open(self.settings) as f:
+            stored = json.load(f)["pin"]
+        self.assertNotIn("1234", json.dumps(stored))              # only a salted hash
+        self.assertTrue(json.loads(self.request("GET", "/api/rides")[1])["pin_set"])
+        status, body = self.post_pin("/api/settings", {"ftp": 210})
+        self.assertEqual((status, body["error"], body["pin"]), (401, "PIN required", True))
+        self.assertEqual(self.post_pin("/api/settings", {"ftp": 210}, "9999")[1]["error"], "Wrong PIN")
+        self.assertEqual(self.post_pin("/api/settings", {"ftp": 210}, "1234")[0], 200)
+        self.assertEqual(self.ride.ftp, 210)
+        # changing or removing the PIN needs the current one
+        self.assertEqual(self.post_pin("/api/settings", {"pin": None})[0], 401)
+        self.assertEqual(self.post_pin("/api/settings", {"pin": None}, "1234")[0], 200)
+        self.assertEqual(self.post_pin("/api/settings", {"ftp": None})[0], 200)
+
+    def test_power_needs_the_pin(self):
+        self.post_pin("/api/settings", {"pin": "4321"})
+        ok = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch("bikecomputer.subprocess.run", return_value=ok) as run:
+            self.assertEqual(self.post_pin("/api/power", {"action": "poweroff"})[0], 401)
+            run.assert_not_called()
+            self.assertEqual(self.post_pin("/api/power", {"action": "poweroff"}, "4321")[0], 200)
+            run.assert_called_once()
+
+    def test_lap_and_reset_need_no_pin(self):
+        self.post_pin("/api/settings", {"pin": "4321"})
+        self.assertEqual(self.post_pin("/api/lap", {})[0], 200)
+        self.assertEqual(self.post_pin("/api/reset", {})[0], 200)
+
+    def test_bad_pins_are_refused(self):
+        for bad in ("12", "123456789", "12a4", 1234):
+            self.assertEqual(self.post_pin("/api/settings", {"pin": bad})[0], 400, bad)
+
+    def test_lockout_after_five_wrong_pins(self):
+        self.post_pin("/api/settings", {"pin": "1234"})
+        for _ in range(5):
+            self.assertEqual(self.post_pin("/api/settings", {"ftp": 200}, "0000")[0], 401)
+        status, body = self.post_pin("/api/settings", {"ftp": 200}, "1234")      # even the right one
+        self.assertEqual(status, 429)
+        self.assertIn("Too many", body["error"])
+
+
+class HistoryTest(ServerBase):
+    def test_history_is_sent_as_columns(self):
+        from ride import Reading
+        self.ride.reset()
+        for w in (100, 200):
+            self.ride.add(Reading(power=w, cadence=90))
+            self.ride.tick(1.0)
+        hist = json.loads(self.request("GET", "/api/history")[1])["history"]
+        self.assertEqual(hist["p"], [100, 200])
+        self.assertEqual(hist["t"], [1.0, 2.0])
+        self.assertEqual(set(hist), {"t", "p", "l", "r", "c", "h", "lap"})
+
+
+class NoPowerTest(unittest.TestCase):
+    def test_power_buttons_off(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), bikecomputer.make_handler(
+            Ride(), bikecomputer.Hub(), tmp.name, None, power_buttons=False))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        c = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+        with mock.patch("bikecomputer.subprocess.run") as run:
+            c.request("POST", "/api/power", body=json.dumps({"action": "poweroff"}),
+                      headers={"Content-Type": "application/json", "X-Bike-Computer": "1"})
+            self.assertEqual(c.getresponse().status, 403)
+        run.assert_not_called()
+        c.close()

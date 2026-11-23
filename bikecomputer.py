@@ -9,10 +9,14 @@ Then open http://<pi-address>:8080 on a phone/tablet/laptop on the same network.
 """
 
 import argparse
+import hashlib
+import hmac
 import json
 import logging
 import os
 import queue
+import re
+import importlib.util
 import signal
 import subprocess
 import sys
@@ -26,7 +30,7 @@ from ridelog import CsvLogger
 import ridelog
 import sources
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 log = logging.getLogger("bikecomputer")
@@ -105,7 +109,73 @@ def save_settings(path, settings):
     os.replace(tmp, path)        # never leave a half-written file
 
 
-def make_handler(ride, hub, log_dir, settings_path=None):
+class PinGuard:
+    """Optional PIN for power off, restart and settings.
+
+    Stored as a salted PBKDF2 hash in settings.json. After 5 wrong PINs in a row,
+    PIN checks are refused for a minute, so guessing a 4-digit PIN takes days.
+    """
+
+    MAX_TRIES = 5
+    LOCKOUT_S = 60
+    PIN_RE = re.compile(r"^\d{4,8}$")
+
+    def __init__(self, settings_path):
+        self.settings_path = settings_path
+        self.lock = threading.Lock()
+        self.failures = 0
+        self.locked_until = 0.0
+
+    @staticmethod
+    def _hash(pin, salt):
+        return hashlib.pbkdf2_hmac("sha256", pin.encode(), salt, 50_000).hex()
+
+    @staticmethod
+    def make(pin):
+        salt = os.urandom(16)
+        return {"salt": salt.hex(), "hash": PinGuard._hash(pin, salt)}
+
+    def stored(self):
+        pin = load_settings(self.settings_path).get("pin") if self.settings_path else None
+        return pin if isinstance(pin, dict) and "salt" in pin and "hash" in pin else None
+
+    def is_set(self):
+        return self.stored() is not None
+
+    def check(self, given):
+        """Returns None if allowed, else (status, message)."""
+        stored = self.stored()
+        if stored is None:
+            return None
+        with self.lock:
+            if time.monotonic() < self.locked_until:
+                return 429, "Too many wrong PINs. Wait a minute and try again."
+            if not given:
+                return 401, "PIN required"
+            try:
+                ok = hmac.compare_digest(self._hash(given, bytes.fromhex(stored["salt"])), stored["hash"])
+            except ValueError:
+                ok = False
+            if ok:
+                self.failures = 0
+                return None
+            self.failures += 1
+            if self.failures >= self.MAX_TRIES:
+                self.failures = 0
+                self.locked_until = time.monotonic() + self.LOCKOUT_S
+                log.warning("%d wrong PINs: PIN checks paused for %d s", self.MAX_TRIES, self.LOCKOUT_S)
+            return 401, "Wrong PIN"
+
+
+def history_columns(history):
+    """Samples as one list per value: about a third of the size for long rides."""
+    keys = ("t", "p", "l", "r", "c", "h", "lap")
+    return {k: [h.get(k) for h in history] for k in keys}
+
+
+def make_handler(ride, hub, log_dir, settings_path=None, power_buttons=True):
+    pins = PinGuard(settings_path)
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             pass
@@ -141,7 +211,9 @@ def make_handler(ride, hub, log_dir, settings_path=None):
                 current = ride.logger.path if ride.logger and ride.logger.f else None
                 rides = ridelog.list_rides(log_dir, current=current, ftp=ride.ftp)
                 self._send(200, json.dumps({"rides": rides, "version": __version__,
-                                            "ftp": ride.ftp}).encode(), "application/json")
+                                            "ftp": ride.ftp, "power_buttons": power_buttons,
+                                            "pin_set": pins.is_set()}).encode(),
+                           "application/json")
             elif path.startswith("/rides/") and ridelog.NAME_RE.match(path[len("/rides/"):]):
                 name = path[len("/rides/"):]
                 try:
@@ -164,7 +236,9 @@ def make_handler(ride, hub, log_dir, settings_path=None):
                     return
                 self._download(name, body, "application/vnd.garmin.tcx+xml")
             elif path == "/api/history":
-                self._send(200, json.dumps(ride.snapshot()).encode(), "application/json")
+                snap = ride.snapshot()
+                snap["history"] = history_columns(snap["history"])
+                self._send(200, json.dumps(snap, separators=(",", ":")).encode(), "application/json")
             elif path == "/events":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
@@ -209,6 +283,17 @@ def make_handler(ride, hub, log_dir, settings_path=None):
                 return {}
             return body if isinstance(body, dict) else {}
 
+        def _error(self, code, msg, **extra):
+            self._send(code, json.dumps({"error": msg, **extra}).encode(), "application/json")
+
+        def _pin_ok(self):
+            """Check the X-PIN header when a PIN is set; sends the error reply if not ok."""
+            problem = pins.check(self.headers.get("X-PIN"))
+            if problem:
+                self._error(problem[0], problem[1], pin=True)
+                return False
+            return True
+
         def do_POST(self):
             path = urlsplit(self.path).path
             if path not in ("/api/reset", "/api/clock", "/api/power", "/api/lap", "/api/settings"):
@@ -224,24 +309,47 @@ def make_handler(ride, hub, log_dir, settings_path=None):
                 if ride.new_lap():
                     log.info("Lap %d started", len(ride.laps) + 1)
             elif path == "/api/settings":
-                ftp = self._json_body().get("ftp", "missing")
-                if ftp is not None and (not isinstance(ftp, int) or isinstance(ftp, bool)
-                                        or not FTP_MIN <= ftp <= FTP_MAX):
-                    self._send(400, f"FTP must be {FTP_MIN} to {FTP_MAX} W".encode(), "text/plain")
+                body = self._json_body()
+                changes = {}
+                if "ftp" in body:
+                    ftp = body["ftp"]
+                    if ftp is not None and (not isinstance(ftp, int) or isinstance(ftp, bool)
+                                            or not FTP_MIN <= ftp <= FTP_MAX):
+                        self._error(400, f"FTP must be {FTP_MIN} to {FTP_MAX} W")
+                        return
+                    changes["ftp"] = ftp
+                if "pin" in body:
+                    pin = body["pin"]
+                    if pin is not None and not (isinstance(pin, str) and PinGuard.PIN_RE.match(pin)):
+                        self._error(400, "The PIN must be 4 to 8 digits")
+                        return
+                    changes["pin"] = PinGuard.make(pin) if pin else None
+                if not changes:
+                    self._error(400, "Nothing to change")
                     return
-                ride.ftp = ftp
-                log.info("FTP set to %s", f"{ftp} W" if ftp else "none")
+                if not self._pin_ok():
+                    return
                 if settings_path:
                     try:
-                        save_settings(settings_path, {**load_settings(settings_path), "ftp": ftp})
+                        save_settings(settings_path, {**load_settings(settings_path), **changes})
                     except OSError as e:
                         log.error("Could not save the settings: %s", e)
-                        self._send(500, f"Could not save the FTP: {e}".encode(), "text/plain; charset=utf-8")
+                        self._error(500, f"Could not save the settings: {e}")
                         return
+                if "ftp" in changes:
+                    ride.ftp = changes["ftp"]
+                    log.info("FTP set to %s", f"{ride.ftp} W" if ride.ftp else "none")
+                if "pin" in changes:
+                    log.info("PIN %s", "set" if changes["pin"] else "removed")
             elif path == "/api/power":
                 action = self._json_body().get("action")
                 if action not in POWER_COMMANDS:
                     self._send(400, b"bad request", "text/plain")
+                    return
+                if not power_buttons:
+                    self._error(403, "Power off is turned off (--no-power).")
+                    return
+                if not self._pin_ok():
                     return
                 ok, msg = power_action(action, ride)
                 self._send(200 if ok else 500, json.dumps({"error": msg} if not ok else {}).encode(),
@@ -253,11 +361,11 @@ def make_handler(ride, hub, log_dir, settings_path=None):
                     self._send(400, b"bad request", "text/plain")
                     return
                 if clock.correct(t / 1000.0):
+                    # The ride file's times are fixed in the next update (Ride.tick).
                     log.info("Clock corrected from the browser by %+.0f s", clock.offset)
-                    if ride.logger:
-                        ride.logger.clock_corrected()
             self._send(200, b"{}", "application/json")
 
+    Handler.pins = pins     # for tests
     return Handler
 
 
@@ -285,8 +393,10 @@ def main():
                     help="ANT+ device number to pair with (0 = first one found)")
     ap.add_argument("--ant-hr-device-id", type=int, default=0,
                     help="ANT+ heart rate strap device number (0 = first one found)")
-    ap.add_argument("--no-heart-rate", action="store_true",
-                    help="don't listen for an ANT+ heart rate strap")
+    ap.add_argument("--heart-rate", choices=["auto", "ant", "ble", "off"], default="auto",
+                    help="where heart rate comes from: auto = the same as --source")
+    ap.add_argument("--no-heart-rate", action="store_true", help="the same as --heart-rate off")
+    ap.add_argument("--hr-ble-name", help="only use Bluetooth heart rate devices whose name contains this")
     ap.add_argument("--ble-address", help="BLE MAC address of the pedals (default: scan)")
     ap.add_argument("--ble-name", help="only connect to BLE devices whose name contains this")
     ap.add_argument("--unknown-balance-side", choices=["left", "right"], default=None,
@@ -296,6 +406,8 @@ def main():
     ap.add_argument("--keep-rides", type=int, default=10,
                     help="keep only this many newest ride CSV files (0 = keep all)")
     ap.add_argument("--no-log", action="store_true", help="don't write ride CSV files")
+    ap.add_argument("--no-power", action="store_true",
+                    help="hide the power off / restart buttons (for testing on a computer)")
     ap.add_argument("--settings", default=os.path.join(HERE, "settings.json"),
                     help="where to keep settings changed on the page, such as FTP")
     args = ap.parse_args()
@@ -306,7 +418,6 @@ def main():
     # instead of a background thread dying while the dashboard keeps running.
     needed = {"ant": "openant", "ble": "bleak"}.get(args.source)
     if needed:
-        import importlib.util
         if importlib.util.find_spec(needed) is None:
             raise SystemExit(
                 f"Python module '{needed}' is not installed for {sys.executable}.\n"
@@ -322,18 +433,31 @@ def main():
                 logger=None if args.no_log else CsvLogger(args.log_dir, keep=args.keep_rides))
     hub = Hub()
 
+    hr = "off" if args.no_heart_rate else args.heart_rate
+    if hr == "auto":
+        hr = {"ant": "ant", "ble": "ble"}.get(args.source, "off")
+    if hr == "ant" and args.source != "ant":
+        raise SystemExit("ANT+ heart rate needs --source ant. Use --heart-rate ble or off.")
+    if hr == "ble" and importlib.util.find_spec("bleak") is None:
+        raise SystemExit("Bluetooth heart rate needs the 'bleak' module: .venv/bin/pip install -r requirements.txt")
+
     if args.source == "ant":
         src = sources.AntSource(ride, device_id=args.ant_device_id,
-                                heart_rate=not args.no_heart_rate, hr_device_id=args.ant_hr_device_id)
+                                heart_rate=hr == "ant", hr_device_id=args.ant_hr_device_id)
     elif args.source == "ble":
         src = sources.BleSource(ride, address=args.ble_address, name_filter=args.ble_name)
     else:
         src = sources.SimSource(ride)
     src.start()
+    hr_src = None
+    if hr == "ble":
+        hr_src = sources.BleHeartRate(ride, name_filter=args.hr_ble_name)
+        hr_src.start()
 
     threading.Thread(target=ticker, args=(ride, hub), name="ticker", daemon=True).start()
 
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), make_handler(ride, hub, args.log_dir, args.settings))
+    server = ThreadingHTTPServer(("0.0.0.0", args.port), make_handler(ride, hub, args.log_dir, args.settings,
+                                                                         power_buttons=not args.no_power))
     server.daemon_threads = True
     log.info("Bike computer %s: dashboard on http://0.0.0.0:%d  (source: %s)",
              __version__, args.port, args.source)

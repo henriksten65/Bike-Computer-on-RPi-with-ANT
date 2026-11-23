@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.7.0 (2026-11-23)
+
+### New
+- **Time in zones**: a bar below the stats on the dashboard, and one for each saved ride.
+- **PIN** for power off, restart and settings, set on the Rides page. Lap and Reset never need
+  it. After 5 wrong PINs, PINs are refused for a minute.
+- **Each ride keeps its FTP**: a new `ftp_w` column in the ride files, so IF, TSS and zones of old
+  rides don't change when you change your FTP.
+- **Heart rate over Bluetooth** (`--heart-rate ble`), with a Bluetooth or an ANT+ power meter.
+- **Heart rate line on the graph**, with its own scale and an **HR** button to hide it.
+- **Whole ride on the graph**: "All" now shows up to 12 hours instead of the last 2, and stays
+  fast on long rides.
+- **Wi-Fi hotspot**: `deploy/hotspot.sh on` makes the Pi start its own network when it can't find
+  a Wi-Fi it knows.
+- **Browser tests** on GitHub: both pages open in headless Chromium on every push, with
+  screenshots.
+- `--no-power` hides the power buttons, for running on a computer.
+
+### Changed
+- Average cadence leaves out coasting, on the dashboard, the ride list and in TCX.
+- The graph's window and smoothing buttons moved from the header to the graph, so the header
+  fits on one line on a phone.
+- Time labels on long rides fall on round times (1:00:00, 2:00:00, …).
+
+### Fixed
+- On a phone, the graph tooltip now hides when you lift your finger.
+- After the page reconnects, the graph no longer shows a point twice or misses one.
+- When the clock is corrected during a ride, the rows already saved get the right time too.
+- The Rides page: the download buttons no longer wrap awkwardly on a phone, and a too-low or
+  too-high FTP shows the page's own message.
+
 ## 0.6.0 (2026-11-23)
 
 ### New

@@ -3,7 +3,7 @@
 [![Tests](https://github.com/henriksten65/Bike-Computer-on-RPi-with-ANT/actions/workflows/tests.yml/badge.svg)](https://github.com/henriksten65/Bike-Computer-on-RPi-with-ANT/actions/workflows/tests.yml)
 
 A Raspberry Pi bike computer for power-meter pedals. The Pi receives power and cadence over
-**ANT+** (USB stick) or **Bluetooth LE**, and heart rate from an ANT+ strap. It serves a live
+**ANT+** (USB stick) or **Bluetooth LE**, and heart rate from an ANT+ or Bluetooth strap. It serves a live
 dashboard you open in a browser on your phone, tablet or laptop. You don't need an app or a
 cloud account.
 
@@ -14,7 +14,7 @@ meters should work too.
 ```
 power meter ──ANT+──────────► USB stick ──────────────┐
             └─BLE (alternative)─► built-in Bluetooth ─┤
-heart rate strap ──ANT+───────► USB stick ────────────┴─► Raspberry Pi ─► Wi-Fi ─► browser
+heart rate strap ──ANT+ or BLE────────────────────────┴─► Raspberry Pi ─► Wi-Fi ─► browser
                                                                          (phone / tablet / laptop)
 ```
 
@@ -22,20 +22,23 @@ heart rate strap ──ANT+───────► USB stick ──────
 
 - **Power**: total, left and right, in big numbers with an L/R balance bar
 - **Cadence** and **moving time**, which pauses on its own when you stop pedalling
-- **Scrolling power graph** with a 1, 5 or 10 minute window or the whole ride, and optional
-  left/right lines
-- **Heart rate** from an ANT+ chest strap or watch (the tile appears once a strap is found)
+- **Scrolling graph** of power with a 1, 5 or 10 minute window or the whole ride (up to 12 hours),
+  with optional left/right and heart rate lines
+- **Heart rate** from an ANT+ or Bluetooth chest strap or watch (the tile appears once a strap is
+  found)
 - **Ride stats**: average, normalized (NP) and max power, average L/R balance, average cadence,
-  average and max heart rate, and work (kJ)
+  average and max heart rate, and work (kJ). Average cadence leaves out coasting.
 - **Training numbers** once you enter your FTP: the current **power zone** (Z1–Z7) on the power
-  tile, zone bands on the graph, and **IF** and **TSS** for the ride and each lap
+  tile, zone bands on the graph, **time in each zone**, and **IF** and **TSS** for the ride and
+  each lap. Each ride keeps the FTP it was ridden with.
 - **Lap button**: a lap table with time, average, NP, max power, IF, heart rate and cadence per
   lap, lap lines on the graph, and one lap per lap in the TCX file
 - **One CSV file per ride**, saved in `rides/` (the newest 10 are kept)
 - **Ride list** at `/rides`: past rides with their stats, and downloads as **TCX** (upload to
   Strava, Garmin Connect, intervals.icu, TrainingPeaks, …) or **CSV** (for a spreadsheet)
 - **Power off and restart buttons** on the ride list page, so you can shut the Pi down safely
-  without a keyboard or SSH
+  without a keyboard or SSH, with an optional **PIN** so nobody else on the Wi-Fi can use them
+- **Wi-Fi hotspot** (optional): on the road, the Pi makes its own network for your phone
 - Clear status messages when something is wrong, for example "ANT+ stick not found". The
   program reconnects on its own when the stick is plugged back in.
 - Works in portrait and landscape, follows the system's light/dark setting, and keeps the phone
@@ -59,8 +62,7 @@ Open http://localhost:8080. Simulator mode needs only the Python standard librar
 - An **ANT+ USB stick**. Most sticks use Dynastream/Garmin IDs `0fcf:1008` or `0fcf:1009`.
   You don't need one if you use Bluetooth only.
 - A power meter that sends ANT+ Bicycle Power or Bluetooth Cycling Power.
-- Optional: an ANT+ heart rate strap, or a watch that broadcasts heart rate over ANT+. Heart
-  rate needs the ANT+ stick; it isn't read over Bluetooth.
+- Optional: a heart rate strap or a watch that broadcasts heart rate, over ANT+ or Bluetooth.
 
 ## Install on the Raspberry Pi
 
@@ -125,8 +127,10 @@ on every phone or laptop. Then the dashboard shows:
 | IF | Intensity Factor = NP ÷ FTP. About 0.75 for an endurance ride, 1.0 for an all-out hour |
 | TSS | Training Stress Score = hours × IF² × 100. One hour at FTP = 100 |
 
-IF and TSS need NP, so they appear after 30 seconds of riding. The ride list shows them for
-saved rides too, worked out with the FTP set now.
+IF and TSS need NP, so they appear after 30 seconds of riding. Below the stats, a bar shows how
+long you've spent in each zone. The ride list shows all of this for saved rides too. Each ride
+file keeps the FTP it was ridden with, so changing your FTP doesn't change old rides. (Rides
+saved before 0.7 don't have it, so they use the FTP set now, marked "FTP (now)".)
 
 ### Laps
 
@@ -136,6 +140,30 @@ become separate laps in the TCX file.
 
 When you're done, open **Rides** on the dashboard and tap **Power off**. Wait until the Pi's
 green light stops flashing before you unplug it.
+
+### PIN
+
+Anyone on the same Wi-Fi can open the dashboard. To stop them powering off the Pi or changing
+your FTP, set a **PIN** (4 to 8 digits) on the **Rides** page. The page then asks for it before
+those actions, and remembers it until you close the tab. **Lap** and **Reset** never need it, so
+they stay quick while riding. After 5 wrong PINs, the Pi refuses PINs for a minute.
+
+Forgot the PIN? On the Pi, remove the `"pin"` entry from `settings.json` and restart the
+service.
+
+### Riding away from home: Wi-Fi hotspot
+
+Away from your home Wi-Fi, the phone has nowhere to connect. Let the Pi make its own network:
+
+```bash
+deploy/hotspot.sh on        # asks for a network name and a password
+```
+
+At home, the Pi keeps using your Wi-Fi as before. When it can't find a Wi-Fi it knows (at boot,
+or when the Wi-Fi drops), it starts the hotspot instead. Connect your phone to it and open
+**http://10.42.0.1:8080**. Once the hotspot is on, it stays on until the Pi restarts.
+`deploy/hotspot.sh status` shows the state, and `deploy/hotspot.sh off` removes it. It needs
+NetworkManager (Raspberry Pi OS Bookworm or newer).
 
 ### If something is wrong
 
@@ -156,7 +184,7 @@ dashboard keeps working.
 
 Each ride is saved as `rides/ride-YYYYMMDD-HHMMSS.csv`, one row per second of moving time:
 
-`time_iso, elapsed_s, power_w, left_w, right_w, cadence_rpm, heart_rate_bpm, lap`
+`time_iso, elapsed_s, power_w, left_w, right_w, cadence_rpm, heart_rate_bpm, lap, ftp_w`
 
 Empty values mean the meter didn't send them (no balance, no strap). A new file starts on
 **Reset** and whenever the program starts. Only the newest 10 are kept, so download the ones
@@ -174,7 +202,8 @@ The file has power, cadence and heart rate for every second of moving time, in U
 GPS or distance, so the sites treat it as an indoor ride. Pauses show up as gaps.
 
 The Pi has no battery-backed clock. Without internet at boot its time can be wrong, so the
-dashboard sends the phone's time and the Pi uses that for file names and timestamps.
+dashboard sends the phone's time and the Pi uses that for file names and timestamps. When the
+time is corrected during a ride, the rows already saved are corrected too.
 
 ## Updating
 
@@ -195,15 +224,18 @@ Pass these to `bikecomputer.py`. For the service, add them to the `ExecStart` li
 |---|---|
 | `--source ant\|ble\|sim` | ANT+ stick (default), the Pi's Bluetooth, or simulated data |
 | `--ant-device-id N` | Pair only with ANT+ device number N, useful when another rider's power meter is nearby. 0 = first one found |
-| `--ant-hr-device-id N` | The same for the ANT+ heart rate strap |
-| `--no-heart-rate` | Don't listen for an ANT+ heart rate strap |
+| `--heart-rate auto\|ant\|ble\|off` | Where heart rate comes from. `auto` (default) = the same as `--source`. ANT+ heart rate needs `--source ant`; Bluetooth heart rate works with either |
+| `--ant-hr-device-id N` | Pair only with ANT+ heart rate strap number N |
+| `--hr-ble-name NAME` | Only use Bluetooth heart rate devices whose name contains NAME |
+| `--no-heart-rate` | The same as `--heart-rate off` |
 | `--ble-name NAME` / `--ble-address AA:BB:..` | Choose which Bluetooth device to connect to |
 | `--unknown-balance-side left\|right` | Change this if **left and right look reversed** (see below) |
 | `--port 8080` | Web server port |
 | `--log-dir DIR` | Where to save ride CSV files (default: `rides/`) |
 | `--keep-rides N` | Keep only the newest N ride CSV files and delete older ones (default 10, 0 = keep all) |
 | `--no-log` | Don't save CSV files |
-| `--settings FILE` | Where to keep settings changed on the page, such as FTP (default: `settings.json`) |
+| `--settings FILE` | Where to keep settings changed on the page, FTP and PIN (default: `settings.json`) |
+| `--no-power` | Hide the power off and restart buttons (for running on a computer) |
 | `--version` | Show the version |
 
 ### About the left/right split
@@ -238,14 +270,14 @@ On older Raspberry Pi OS versions the command is `chromium-browser`.
 | Path | What it is |
 |---|---|
 | `bikecomputer.py` | Main program: web server, live updates, power off |
-| `sources.py` | Data sources: ANT+ (power and heart rate), Bluetooth LE and the simulator |
+| `sources.py` | Data sources: ANT+ (power and heart rate), Bluetooth (power and heart rate) and the simulator |
 | `ride.py` | Ride state: 1-second samples, moving time, laps, stats, NP, zones, IF and TSS |
 | `ridelog.py` | Ride CSV files: writing, keeping the newest 10, reading them back for the ride list, and TCX export |
 | `static/index.html` | The dashboard |
 | `static/rides.html` | The ride list, with downloads and the power off button |
-| `deploy/` | Install script, systemd service template and udev rule for the Pi |
+| `deploy/` | Install script, Wi-Fi hotspot script, systemd service template and udev rule for the Pi |
 | `CHANGELOG.md` | What changed in each version |
-| `tests/` | Tests |
+| `tests/` | Tests, including `test_browser.py`, which opens the pages in a real browser |
 | `.github/workflows/tests.yml` | Runs the tests on GitHub on every push |
 
 ## Tests
@@ -257,6 +289,18 @@ python3 -m unittest
 ```
 
 GitHub runs them on every push, on Python 3.10 to 3.13 (see the badge at the top).
+
+`tests/test_browser.py` opens the dashboard and the ride list in headless Chromium, with the
+simulator running. It fails on any JavaScript error, and checks the pages' features and that
+they fit a phone screen. It needs Playwright, so it's skipped unless that's installed:
+
+```bash
+pip install playwright && playwright install --with-deps chromium
+SCREENSHOT_DIR=screenshots python3 -m unittest tests.test_browser
+```
+
+On GitHub it runs on every push, and the screenshots (phone and desktop, light and dark) are
+kept with each run under **Actions**.
 
 ## License
 
