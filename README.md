@@ -20,7 +20,7 @@ power meter ──ANT+──► USB stick ─────────► Raspber
 - **Scrolling power graph** with a 1, 5 or 10 minute window or the whole ride, and optional
   left/right lines
 - **Ride stats**: average and max power, average L/R balance, average cadence, and work (kJ)
-- **One CSV file per ride**, saved in `rides/`
+- **One CSV file per ride**, saved in `rides/` (the newest 10 are kept)
 - Works in portrait and landscape, follows the system's light/dark setting, and keeps the phone
   screen on (Wake Lock API)
 - **Simulator mode**: try the dashboard on any computer with plain Python and nothing else
@@ -100,6 +100,7 @@ journalctl -u bikecomputer -f      # watch the log
 | `--unknown-balance-side left\|right` | Change this if **left and right look reversed** (see below) |
 | `--port 8080` | Web server port |
 | `--log-dir DIR` | Where to save ride CSV files (default: `rides/`) |
+| `--keep-rides N` | Keep only the newest N ride CSV files and delete older ones (default 10, 0 = keep all) |
 | `--no-log` | Don't save CSV files |
 
 ### About the left/right split

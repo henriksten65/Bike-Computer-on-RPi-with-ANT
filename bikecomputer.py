@@ -30,10 +30,24 @@ log = logging.getLogger("bikecomputer")
 class CsvLogger:
     """Writes one CSV per ride into rides/ (a new file on every reset)."""
 
-    def __init__(self, directory):
+    def __init__(self, directory, keep=10):
         self.dir = directory
+        self.keep = keep   # how many ride files to keep (0 = keep all)
         self.f = None
         self.w = None
+
+    def _prune(self):
+        """Delete the oldest ride files so that only the newest `keep` remain."""
+        if self.keep <= 0:
+            return
+        rides = sorted(n for n in os.listdir(self.dir)
+                       if n.startswith("ride-") and n.endswith(".csv"))
+        for name in rides[:-self.keep]:
+            try:
+                os.remove(os.path.join(self.dir, name))
+                log.info("Deleted old ride file %s", name)
+            except OSError as e:
+                log.warning("Could not delete %s: %s", name, e)
 
     def new_file(self):
         if self.f:
@@ -48,6 +62,7 @@ class CsvLogger:
             self.w = csv.writer(self.f)
             self.w.writerow(["time_iso", "elapsed_s", "power_w", "left_w", "right_w", "cadence_rpm"])
             log.info("Logging ride to %s", path)
+            self._prune()
         self.w.writerow([datetime.fromtimestamp(s["wall"]).isoformat(timespec="seconds"),
                          s["t"], s["p"], s["l"], s["r"], s["c"]])
         self.f.flush()
@@ -154,6 +169,8 @@ def main():
                     help="which pedal a balance value refers to when the meter says 'unknown'. "
                          "Default: right for ANT+, left for BLE. Flip it if L/R look swapped.")
     ap.add_argument("--log-dir", default=os.path.join(HERE, "rides"))
+    ap.add_argument("--keep-rides", type=int, default=10,
+                    help="keep only this many newest ride CSV files (0 = keep all)")
     ap.add_argument("--no-log", action="store_true", help="don't write ride CSV files")
     args = ap.parse_args()
 
@@ -172,7 +189,7 @@ def main():
 
     side = args.unknown_balance_side or ("left" if args.source == "ble" else "right")
     ride = Ride(unknown_balance_side=side,
-                logger=None if args.no_log else CsvLogger(args.log_dir))
+                logger=None if args.no_log else CsvLogger(args.log_dir, keep=args.keep_rides))
     hub = Hub()
 
     if args.source == "ant":
