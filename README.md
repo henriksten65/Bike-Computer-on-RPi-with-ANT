@@ -1,5 +1,7 @@
 # Bike Computer on RPi with ANT+
 
+[![Tests](https://github.com/henriksten65/Bike-Computer-on-RPi-with-ANT/actions/workflows/tests.yml/badge.svg)](https://github.com/henriksten65/Bike-Computer-on-RPi-with-ANT/actions/workflows/tests.yml)
+
 A Raspberry Pi bike computer for power-meter pedals. The Pi receives power and cadence over
 **ANT+** (USB stick) or **Bluetooth LE**, and heart rate from an ANT+ strap. It serves a live
 dashboard you open in a browser on your phone, tablet or laptop. You don't need an app or a
@@ -206,6 +208,7 @@ On older Raspberry Pi OS versions the command is `chromium-browser`.
 | `deploy/` | Install script, systemd service template and udev rule for the Pi |
 | `CHANGELOG.md` | What changed in each version |
 | `tests/` | Tests |
+| `.github/workflows/tests.yml` | Runs the tests on GitHub on every push |
 
 ## Tests
 
@@ -214,6 +217,8 @@ The tests need only Python, not the Pi or the ANT+ stick:
 ```bash
 python3 -m unittest
 ```
+
+GitHub runs them on every push, on Python 3.10 to 3.13 (see the badge at the top).
 
 ## License
 
