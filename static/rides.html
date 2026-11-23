@@ -86,6 +86,7 @@
     <button class="btn" id="reboot">Restart</button>
   </div>
   <div class="msg" id="msg" role="status"></div>
+  <p class="note" id="version"></p>
 
 <script>
 (() => {
@@ -107,7 +108,8 @@
   async function load() {
     try {
       const r = await fetch("/api/rides");
-      const { rides } = await r.json();
+      const { rides, version } = await r.json();
+      if (version) $("version").textContent = `Bike computer ${version}`;
       if (!rides.length) { $("list").innerHTML = `<p class="empty">No rides saved yet.</p>`; return; }
       $("list").innerHTML = rides.map(x => `
         <article class="ride">

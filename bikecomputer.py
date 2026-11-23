@@ -26,6 +26,8 @@ from ridelog import CsvLogger
 import ridelog
 import sources
 
+__version__ = "0.4.0"
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 log = logging.getLogger("bikecomputer")
 
@@ -106,7 +108,7 @@ def make_handler(ride, hub, log_dir):
             elif path == "/api/rides":
                 current = ride.logger.path if ride.logger and ride.logger.f else None
                 rides = ridelog.list_rides(log_dir, current=current)
-                self._send(200, json.dumps({"rides": rides}).encode(), "application/json")
+                self._send(200, json.dumps({"rides": rides, "version": __version__}).encode(), "application/json")
             elif path.startswith("/rides/") and ridelog.NAME_RE.match(path[len("/rides/"):]):
                 name = path[len("/rides/"):]
                 try:
@@ -219,6 +221,7 @@ def ticker(ride, hub):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--version", action="version", version=f"bikecomputer {__version__}")
     ap.add_argument("--source", choices=["ant", "ble", "sim"], default="ant")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--ant-device-id", type=int, default=0,
@@ -269,7 +272,8 @@ def main():
 
     server = ThreadingHTTPServer(("0.0.0.0", args.port), make_handler(ride, hub, args.log_dir))
     server.daemon_threads = True
-    log.info("Dashboard on http://0.0.0.0:%d  (source: %s)", args.port, args.source)
+    log.info("Bike computer %s: dashboard on http://0.0.0.0:%d  (source: %s)",
+             __version__, args.port, args.source)
 
     # systemd stops the service with SIGTERM: shut down the same way as Ctrl+C.
     def on_term(*_):

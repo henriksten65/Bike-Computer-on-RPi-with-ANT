@@ -63,7 +63,9 @@ class ServerTest(unittest.TestCase):
 
     def test_ride_list(self):
         r, body = self.request("GET", "/api/rides")
-        rides = json.loads(body)["rides"]
+        data = json.loads(body)
+        self.assertEqual(data["version"], bikecomputer.__version__)
+        rides = data["rides"]
         self.assertEqual([x["name"] for x in rides], ["ride-20261123-100000.csv"])
         self.assertEqual((rides[0]["avg_p"], rides[0]["avg_hr"]), (210, 130))
 

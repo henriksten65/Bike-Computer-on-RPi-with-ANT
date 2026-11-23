@@ -1,16 +1,19 @@
 # Bike Computer on RPi with ANT+
 
 A Raspberry Pi bike computer for power-meter pedals. The Pi receives power and cadence over
-**ANT+** (USB stick) or **Bluetooth LE**, plus heart rate from an ANT+ strap, and serves a live dashboard you open in a browser on
-your phone, tablet or laptop. You don't need an app or a cloud account.
+**ANT+** (USB stick) or **Bluetooth LE**, and heart rate from an ANT+ strap. It serves a live
+dashboard you open in a browser on your phone, tablet or laptop. You don't need an app or a
+cloud account.
 
 It was built for the **Magene P715** pedals on a Raspberry Pi 4. The program reads the standard
 ANT+ Bicycle Power profile and the Bluetooth Cycling Power Service (0x1818), so other power
 meters should work too.
 
 ```
-power meter ──ANT+──► USB stick ─────────► Raspberry Pi ─► Wi-Fi ─► browser (phone / tablet / laptop)
-            └─BLE (alternative)─► built-in Bluetooth ─┘
+power meter ──ANT+──────────► USB stick ──────────────┐
+            └─BLE (alternative)─► built-in Bluetooth ─┤
+heart rate strap ──ANT+───────► USB stick ────────────┴─► Raspberry Pi ─► Wi-Fi ─► browser
+                                                                         (phone / tablet / laptop)
 ```
 
 ## Features
@@ -49,7 +52,8 @@ Open http://localhost:8080. Simulator mode needs only the Python standard librar
 - An **ANT+ USB stick**. Most sticks use Dynastream/Garmin IDs `0fcf:1008` or `0fcf:1009`.
   You don't need one if you use Bluetooth only.
 - A power meter that sends ANT+ Bicycle Power or Bluetooth Cycling Power.
-- Optional: an ANT+ heart rate strap, or a watch that broadcasts heart rate over ANT+.
+- Optional: an ANT+ heart rate strap, or a watch that broadcasts heart rate over ANT+. Heart
+  rate needs the ANT+ stick; it isn't read over Bluetooth.
 
 ## Install on the Raspberry Pi
 
@@ -105,7 +109,48 @@ To run it by hand instead (stop the service first with `sudo systemctl stop bike
 When you're done, open **Rides** on the dashboard and tap **Power off**. Wait until the Pi's
 green light stops flashing before you unplug it.
 
+### If something is wrong
+
+The status line at the top of the dashboard says what's happening:
+
+| Message | What to do |
+|---|---|
+| Searching for pedals… | Start pedalling to wake the pedals |
+| ANT+ stick not found | Plug in the stick. The program reconnects on its own |
+| No permission to open the ANT+ stick | Run `deploy/install.sh` (it installs the udev rule) |
+| Lost connection to the bike computer | The phone can't reach the Pi: check the Wi-Fi, or whether the Pi is on |
+| No data from the bike computer | The program stopped updating: check `journalctl -u bikecomputer` |
+
+A red banner means the ride can't be saved, for example because the SD card is full. The
+dashboard keeps working.
+
+## Ride files
+
+Each ride is saved as `rides/ride-YYYYMMDD-HHMMSS.csv`, one row per second of moving time:
+
+`time_iso, elapsed_s, power_w, left_w, right_w, cadence_rpm, heart_rate_bpm`
+
+Empty values mean the meter didn't send them (no balance, no strap). A new file starts on
+**Reset** and whenever the program starts. Only the newest 10 are kept, so download the ones
+you want to keep from the **Rides** page.
+
+The Pi has no battery-backed clock. Without internet at boot its time can be wrong, so the
+dashboard sends the phone's time and the Pi uses that for file names and timestamps.
+
+## Updating
+
+```bash
+cd Bike-Computer-on-RPi-with-ANT
+git pull
+deploy/install.sh        # installs new libraries and restarts the service
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for what changed.
+
 ## Options
+
+Pass these to `bikecomputer.py`. For the service, add them to the `ExecStart` line in
+`deploy/bikecomputer.service` and run `deploy/install.sh` again.
 
 | Option | Meaning |
 |---|---|
@@ -119,6 +164,7 @@ green light stops flashing before you unplug it.
 | `--log-dir DIR` | Where to save ride CSV files (default: `rides/`) |
 | `--keep-rides N` | Keep only the newest N ride CSV files and delete older ones (default 10, 0 = keep all) |
 | `--no-log` | Don't save CSV files |
+| `--version` | Show the version |
 
 ### About the left/right split
 
@@ -127,8 +173,8 @@ Power meters don't send separate left and right watts. They send the **total** p
 percentage as "right pedal" or "unknown". Bluetooth marks it as "left pedal" or "unknown".
 When the meter says "unknown", the program assumes right for ANT+ and left for Bluetooth.
 
-Check it once: push mostly with one leg. If the wrong side goes up, restart with
-`--unknown-balance-side` set to the other side.
+Check it once: push mostly with one leg. If the wrong side goes up, add
+`--unknown-balance-side` with the other side to the options.
 
 ### ANT+ or Bluetooth?
 
@@ -142,8 +188,10 @@ Any HDMI or DSI screen on the Pi can show the same dashboard. Install a minimal 
 Chromium in kiosk mode:
 
 ```bash
-chromium-browser --kiosk --noerrdialogs http://localhost:8080
+chromium --kiosk --noerrdialogs http://localhost:8080
 ```
+
+On older Raspberry Pi OS versions the command is `chromium-browser`.
 
 ## Project layout
 
@@ -156,6 +204,7 @@ chromium-browser --kiosk --noerrdialogs http://localhost:8080
 | `static/index.html` | The dashboard |
 | `static/rides.html` | The ride list, with downloads and the power off button |
 | `deploy/` | Install script, systemd service template and udev rule for the Pi |
+| `CHANGELOG.md` | What changed in each version |
 | `tests/` | Tests |
 
 ## Tests
