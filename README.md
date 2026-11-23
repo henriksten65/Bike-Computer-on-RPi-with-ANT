@@ -19,7 +19,7 @@ power meter ──ANT+──► USB stick ─────────► Raspber
 - **Cadence** and **moving time**, which pauses on its own when you stop pedalling
 - **Scrolling power graph** with a 1, 5 or 10 minute window or the whole ride, and optional
   left/right lines
-- **Ride stats**: average and max power, average L/R balance, average cadence, and work (kJ)
+- **Ride stats**: average, normalized (NP) and max power, average L/R balance, average cadence, and work (kJ)
 - **One CSV file per ride**, saved in `rides/` (the newest 10 are kept)
 - Works in portrait and landscape, follows the system's light/dark setting, and keeps the phone
   screen on (Wake Lock API)

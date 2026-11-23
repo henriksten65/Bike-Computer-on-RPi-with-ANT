@@ -162,7 +162,7 @@
     </div>
   </section>
 
-  <section class="stats" id="stats"></section>
+  <section class="stats" id="stats" title="NP = normalized power: like the average, but weights hard efforts more, so it reflects how hard the ride felt"></section>
 
   <section class="tile chart">
     <div class="legend">
@@ -258,6 +258,7 @@
     const avgBal = balTot > 0 ? `${Math.round(100 * st.avg_l / balTot)}/${Math.round(100 * st.avg_r / balTot)}` : "—";
     $("stats").innerHTML =
       `<span>Avg <b>${st.avg_p ?? "—"} W</b></span>` +
+      `<span>NP <b>${st.np ?? "—"} W</b></span>` +
       `<span>Max <b>${st.max_p ?? "—"} W</b></span>` +
       `<span>Avg L/R <b>${avgBal}</b></span>` +
       `<span>Avg cad <b>${st.avg_c ?? "—"} rpm</b></span>` +

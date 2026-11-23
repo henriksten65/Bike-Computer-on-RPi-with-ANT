@@ -2,6 +2,7 @@
 
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -9,6 +10,8 @@ from typing import Optional
 STALE_AFTER_S = 3.0
 # Keep this many 1 s samples in memory so a reloaded page can redraw the graph (2 h).
 HISTORY_LEN = 2 * 60 * 60
+# Normalized power uses a rolling average over this many seconds of riding.
+NP_WINDOW_S = 30
 
 
 @dataclass
@@ -41,6 +44,9 @@ class Ride:
             self.n_moving = 0
             self.max_power = 0
             self.energy_j = 0.0
+            self._np_window = deque(maxlen=NP_WINDOW_S)  # last 30 s of power while moving
+            self._np_sum4 = 0.0                        # sum of (30 s average) ** 4
+            self._np_n = 0
             self.started_wall = None
         if self.logger:
             self.logger.new_file()
@@ -100,6 +106,12 @@ class Ride:
                 self.sum_right += right or 0
                 self.max_power = max(self.max_power, power)
                 self.energy_j += power * dt
+                # Normalized power: 4th-power mean of the 30 s rolling average,
+                # counted once the first full 30 s window is available.
+                self._np_window.append(power)
+                if len(self._np_window) == NP_WINDOW_S:
+                    self._np_sum4 += (sum(self._np_window) / NP_WINDOW_S) ** 4
+                    self._np_n += 1
 
             sample = {
                 "t": round(self.elapsed, 1),
@@ -130,6 +142,7 @@ class Ride:
             "avg_r": round(self.sum_right / n),
             "avg_c": round(self.sum_cadence / n),
             "max_p": round(self.max_power),
+            "np": round((self._np_sum4 / self._np_n) ** 0.25) if self._np_n else None,
             "kj": round(self.energy_j / 1000, 1),
             "elapsed": round(self.elapsed, 1),
         }
