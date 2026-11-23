@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 (2026-11-23)
 
 ### New
 - **Lap button** on the dashboard: current lap and a lap table (time, average, NP, max power,
