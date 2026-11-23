@@ -22,6 +22,29 @@ ANTPLUS_NETWORK_KEY = [0xB9, 0xA5, 0x21, 0xFB, 0xBD, 0x72, 0xC3, 0x45]
 ANT_DEVICE_TYPE_POWER = 11
 ANT_POWER_PERIOD = 8182      # 4.00 Hz
 ANT_RF_FREQ = 57             # 2457 MHz
+ANT_USB_VENDOR = 0x0FCF      # Dynastream; used by nearly all ANT+ USB sticks
+
+
+def _ant_error_text(e):
+    """A short, actionable message for the page about an ANT+ failure."""
+    name = type(e).__name__
+    msg = str(e)
+    if name == "DriverNotFound" or "Device not found" in msg:
+        return "ANT+ stick not found. Is it plugged in?"
+    if getattr(e, "errno", None) == 13 or "Access denied" in msg or "Permission" in msg:
+        return "No permission to open the ANT+ stick. Install the udev rule (see README)."
+    if getattr(e, "errno", None) == 16 or "Resource busy" in msg:
+        return "The ANT+ stick is in use by another program."
+    return f"ANT+ error: {name}: {msg}"
+
+
+def _ant_stick_present():
+    """True if an ANT+ USB stick is plugged in (None if we can't tell)."""
+    try:
+        import usb.core
+        return usb.core.find(idVendor=ANT_USB_VENDOR) is not None
+    except Exception:
+        return None
 
 
 class AntSource:
@@ -47,6 +70,25 @@ class AntSource:
 
     def start(self):
         threading.Thread(target=self._run, name="ant", daemon=True).start()
+        threading.Thread(target=self._watch_stick, name="ant-watch", daemon=True).start()
+
+    def _watch_stick(self):
+        """Restart ANT+ when the stick is unplugged.
+
+        openant only logs USB errors and keeps waiting, so on its own it never
+        notices the stick is gone and never reconnects when it's plugged back in.
+        """
+        while True:
+            time.sleep(2)
+            node = self.node
+            if node is not None and _ant_stick_present() is False:
+                log.error("ANT+ stick was unplugged")
+                self.ride.set_source_status("error", "ANT+ stick not found. Is it plugged in?")
+                self.node = None
+                try:
+                    node.stop()       # makes node.start() in _run return
+                except Exception:
+                    pass
 
     def _run(self):
         from openant.easy.node import Node
@@ -54,6 +96,7 @@ class AntSource:
 
         while True:
             try:
+                self.node = None
                 self.node = Node()
                 self.node.set_network_key(0x00, ANTPLUS_NETWORK_KEY)
                 ch = self.node.new_channel(Channel.Type.BIDIRECTIONAL_RECEIVE)
@@ -67,9 +110,13 @@ class AntSource:
                 ch.open()
                 log.info("ANT+ channel open, searching for power meter (device id %s)",
                          self.device_id or "any")
+                self._last_event = None
+                self.ride.set_source_status("searching", "Searching for pedals (ANT+)… Start pedalling to wake them.")
                 self.node.start()              # blocks until stopped / error
-            except Exception as e:  # USB unplugged, permissions, ...
+                time.sleep(1)                  # stopped by _watch_stick: retry soon
+            except Exception as e:  # stick missing, permissions, ...
                 log.error("ANT+ error: %s: %s; retrying in 5 s", type(e).__name__, e)
+                self.ride.set_source_status("error", _ant_error_text(e))
                 try:
                     self.node.stop()
                 except Exception:
@@ -90,6 +137,7 @@ class AntSource:
             return
         if self._last_event is None:
             log.info("ANT+ power meter found")
+            self.ride.set_source_status("searching", "Pedals found (ANT+) but they stopped sending. Start pedalling to wake them.")
         self._last_event = event
         self._last_event_change = now
 
@@ -154,18 +202,27 @@ class BleSource:
         while True:
             try:
                 log.info("BLE: scanning for a cycling power meter...")
+                self.ride.set_source_status("searching", "Searching for pedals (Bluetooth)… Start pedalling to wake them.")
                 dev = await self._find()
                 if dev is None:
                     continue
                 log.info("BLE: connecting to %s (%s)", dev.name, dev.address)
+                self.ride.set_source_status("searching", f"Connecting to {dev.name or dev.address} (Bluetooth)…")
                 disconnected = asyncio.Event()
                 async with BleakClient(dev, disconnected_callback=lambda c: disconnected.set()) as client:
                     await client.start_notify(CPS_MEASUREMENT, self._on_notify)
                     log.info("BLE: receiving data")
+                    self.ride.set_source_status("searching", f"Connected to {dev.name or dev.address} (Bluetooth), waiting for data. Start pedalling.")
                     await disconnected.wait()
                 log.warning("BLE: disconnected")
             except Exception as e:
-                log.error("BLE error: %s; retrying in 5 s", e)
+                log.error("BLE error: %s: %s; retrying in 5 s", type(e).__name__, e)
+                msg = str(e)
+                if "adapter" in msg.lower() or "NotReady" in msg or "PowerOff" in msg:
+                    text = "Bluetooth is off or not available on the Pi."
+                else:
+                    text = f"Bluetooth error: {msg or type(e).__name__}"
+                self.ride.set_source_status("error", text)
                 await asyncio.sleep(5)
 
     def _on_notify(self, _char, data: bytearray):
@@ -207,6 +264,7 @@ class SimSource:
         self.ride = ride
 
     def start(self):
+        self.ride.set_source_status("searching", "Simulator")
         threading.Thread(target=self._run, name="sim", daemon=True).start()
 
     def _run(self):

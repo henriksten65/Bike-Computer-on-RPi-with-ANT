@@ -19,8 +19,9 @@ import threading
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
 
-from ride import Ride
+from ride import Ride, clock
 import sources
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28,13 +29,20 @@ log = logging.getLogger("bikecomputer")
 
 
 class CsvLogger:
-    """Writes one CSV per ride into rides/ (a new file on every reset)."""
+    """Writes one CSV per ride into rides/ (a new file on every reset).
+
+    A failed write (disk full, no permission, ...) never stops the ride: it is
+    logged once, shown on the page via `error`, and retried with the next sample.
+    """
 
     def __init__(self, directory, keep=10):
         self.dir = directory
         self.keep = keep   # how many ride files to keep (0 = keep all)
         self.f = None
         self.w = None
+        self.path = None
+        self.error = None          # message for the page while saving fails
+        self._opened_mono = None   # time.monotonic() when the file was opened
 
     def _prune(self):
         """Delete the oldest ride files so that only the newest `keep` remain."""
@@ -49,23 +57,53 @@ class CsvLogger:
             except OSError as e:
                 log.warning("Could not delete %s: %s", name, e)
 
+    def _name(self, wall):
+        return os.path.join(self.dir, datetime.fromtimestamp(wall).strftime("ride-%Y%m%d-%H%M%S.csv"))
+
     def new_file(self):
         if self.f:
-            self.f.close()
+            try:
+                self.f.close()
+            except OSError:
+                pass
             self.f = None
 
     def write(self, s):
+        try:
+            if self.f is None:
+                os.makedirs(self.dir, exist_ok=True)
+                self.path = self._name(clock.now())
+                self.f = open(self.path, "w", newline="")
+                self._opened_mono = time.monotonic()
+                self.w = csv.writer(self.f)
+                self.w.writerow(["time_iso", "elapsed_s", "power_w", "left_w", "right_w", "cadence_rpm"])
+                log.info("Logging ride to %s", self.path)
+                self._prune()
+            self.w.writerow([datetime.fromtimestamp(s["wall"]).isoformat(timespec="seconds"),
+                             s["t"], s["p"], s["l"], s["r"], s["c"]])
+            self.f.flush()
+            if self.error:
+                log.info("Saving the ride works again")
+                self.error = None
+        except OSError as e:
+            if not self.error:
+                log.error("Could not save the ride to %s: %s", self.path or self.dir, e)
+            self.error = f"Can't save the ride: {e.strerror or e}"
+            self.new_file()   # start over with a fresh file next time
+
+    def clock_corrected(self):
+        """Rename the open ride file so its name uses the corrected time."""
         if self.f is None:
-            os.makedirs(self.dir, exist_ok=True)
-            path = os.path.join(self.dir, datetime.now().strftime("ride-%Y%m%d-%H%M%S.csv"))
-            self.f = open(path, "w", newline="")
-            self.w = csv.writer(self.f)
-            self.w.writerow(["time_iso", "elapsed_s", "power_w", "left_w", "right_w", "cadence_rpm"])
-            log.info("Logging ride to %s", path)
-            self._prune()
-        self.w.writerow([datetime.fromtimestamp(s["wall"]).isoformat(timespec="seconds"),
-                         s["t"], s["p"], s["l"], s["r"], s["c"]])
-        self.f.flush()
+            return
+        new = self._name(clock.now() - (time.monotonic() - self._opened_mono))
+        if new != self.path:
+            try:
+                os.rename(self.path, new)
+                log.info("Renamed %s to %s after the clock was corrected",
+                         os.path.basename(self.path), os.path.basename(new))
+                self.path = new
+            except OSError as e:
+                log.warning("Could not rename %s: %s", self.path, e)
 
 
 class Hub:
@@ -109,12 +147,13 @@ def make_handler(ride, hub):
             self.wfile.write(body)
 
         def do_GET(self):
-            if self.path in ("/", "/index.html"):
+            path = urlsplit(self.path).path
+            if path in ("/", "/index.html"):
                 with open(os.path.join(HERE, "static", "index.html"), "rb") as f:
                     self._send(200, f.read(), "text/html; charset=utf-8")
-            elif self.path == "/api/history":
+            elif path == "/api/history":
                 self._send(200, json.dumps(ride.snapshot()).encode(), "application/json")
-            elif self.path == "/events":
+            elif path == "/events":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-store")
@@ -128,20 +167,57 @@ def make_handler(ride, hub):
                         except queue.Empty:
                             self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
+                except OSError:   # browser went away
                     pass
                 finally:
                     hub.unsubscribe(q)
             else:
                 self._send(404, b"not found", "text/plain")
 
+        def _post_allowed(self):
+            """Only accept POSTs from the dashboard itself.
+
+            Another web page open in a browser on the same network could otherwise
+            send a POST here (for example to reset the ride). A custom header can't
+            be sent cross-site without a CORS preflight, which this server never
+            answers, and the Origin check is a second guard.
+            """
+            if self.headers.get("X-Bike-Computer") != "1":
+                return False
+            origin = self.headers.get("Origin")
+            return not origin or urlsplit(origin).netloc == self.headers.get("Host")
+
+        def _json_body(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            if not 0 < n <= 1024:
+                return {}
+            try:
+                body = json.loads(self.rfile.read(n))
+            except ValueError:
+                return {}
+            return body if isinstance(body, dict) else {}
+
         def do_POST(self):
-            if self.path == "/api/reset":
+            path = urlsplit(self.path).path
+            if path not in ("/api/reset", "/api/clock"):
+                self._send(404, b"not found", "text/plain")
+                return
+            if not self._post_allowed():
+                self._send(403, b"forbidden", "text/plain")
+                return
+            if path == "/api/reset":
                 ride.reset()
                 hub.publish({"type": "reset"})
-                self._send(200, b"{}", "application/json")
             else:
-                self._send(404, b"not found", "text/plain")
+                t = self._json_body().get("now")
+                if not isinstance(t, (int, float)) or isinstance(t, bool):
+                    self._send(400, b"bad request", "text/plain")
+                    return
+                if clock.correct(t / 1000.0):
+                    log.info("Clock corrected from the browser by %+.0f s", clock.offset)
+                    if ride.logger:
+                        ride.logger.clock_corrected()
+            self._send(200, b"{}", "application/json")
 
     return Handler
 
@@ -152,9 +228,13 @@ def ticker(ride, hub):
     while True:
         nxt += 1.0
         time.sleep(max(0, nxt - time.monotonic()))
-        sample = ride.tick(1.0)
-        sample["type"] = "sample"
-        hub.publish(sample)
+        try:
+            sample = ride.tick(1.0)
+            sample["type"] = "sample"
+            hub.publish(sample)
+        except Exception:
+            # Never let one bad second stop the dashboard for the rest of the ride.
+            log.exception("Error while updating the ride")
 
 
 def main():

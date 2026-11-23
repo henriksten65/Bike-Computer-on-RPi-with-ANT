@@ -21,6 +21,7 @@
     --series-right:  #d95926;   /* orange */
     --ok:            #0ca30c;
     --warn:          #c98500;
+    --bad:           #e5484d;
   }
   @media (prefers-color-scheme: light) {
     :root:not([data-theme="dark"]) {
@@ -38,6 +39,7 @@
       --series-right:  #eb6834;
       --ok:            #008300;
       --warn:          #b07000;
+      --bad:           #c62a2f;
     }
   }
   :root[data-theme="dark"] { color-scheme: dark; }
@@ -59,6 +61,12 @@
   .status { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-secondary); margin-right: auto; }
   .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); }
   .dot.ok { background: var(--ok); }
+  .dot.bad { background: var(--bad); }
+  .alert {
+    display: none; border: 1px solid var(--bad); border-radius: 8px; padding: 8px 12px;
+    font-size: 14px; color: var(--text-primary); background: var(--surface-1);
+  }
+  .alert.show { display: block; }
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   .seg button, .btn {
     background: var(--surface-1); color: var(--text-secondary); border: 0;
@@ -131,6 +139,8 @@
     </div>
     <button class="btn" id="reset">Reset</button>
   </header>
+
+  <div class="alert" id="alert" role="alert"></div>
 
   <section class="tiles">
     <div class="tile">
@@ -211,8 +221,19 @@
   setupSeg("smooth", () => smoothS, v => { smoothS = v; try { localStorage.setItem("bc.smooth", v); } catch (e) {} });
 
   $("reset").onclick = () => {
-    if (confirm("Reset the ride? (timer, graph and averages)")) fetch("/api/reset", { method: "POST" });
+    if (confirm("Reset the ride? (timer, graph and averages)")) post("/api/reset");
   };
+
+  // POSTs must carry this header; the server rejects POSTs from other web pages.
+  function post(path, body) {
+    return fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Bike-Computer": "1" },
+      body: JSON.stringify(body || {}),
+    }).catch(() => {});
+  }
+  // The Pi has no battery-backed clock; give it the phone's time for ride file names.
+  const sendClock = () => post("/api/clock", { now: Date.now() });
 
   // ---------- formatting
   const fmtTime = s => {
@@ -264,12 +285,37 @@
       `<span>Avg cad <b>${st.avg_c ?? "—"} rpm</b></span>` +
       `<span>Work <b>${st.kj ?? "—"} kJ</b></span>`;
 
-    const dot = $("dot");
-    dot.classList.toggle("ok", !!latest.connected);
-    $("status").textContent = latest.connected
-      ? (latest.moving ? "Receiving" : "Connected · paused")
-      : "Searching for pedals…";
+    renderStatus();
   }
+
+  // ---------- status line and warnings
+  const STALE_MS = 5000;     // no sample for this long = the bike computer stopped updating
+  let lastMsgAt = 0, linkDown = false;
+
+  function renderStatus() {
+    const dot = $("dot"), status = $("status");
+    const stale = !linkDown && lastMsgAt && Date.now() - lastMsgAt > STALE_MS;
+    const src = (latest && latest.source) || {};
+    let text, cls = "";
+    if (linkDown) {
+      text = "Lost connection to the bike computer. Retrying…"; cls = "bad";
+    } else if (stale) {
+      text = "No data from the bike computer. The numbers are not updating."; cls = "bad";
+    } else if (!latest) {
+      text = "Connecting…";
+    } else if (latest.connected) {
+      text = latest.moving ? "Receiving" : "Connected · paused"; cls = "ok";
+    } else {
+      text = src.text || "Searching for pedals…"; cls = src.level === "error" ? "bad" : "";
+    }
+    status.textContent = text;
+    dot.classList.toggle("ok", cls === "ok");
+    dot.classList.toggle("bad", cls === "bad");
+    const err = latest && !linkDown && !stale ? latest.log_error : null;
+    $("alert").textContent = err ? `${err}. The dashboard keeps working, but this ride is not being saved.` : "";
+    $("alert").classList.toggle("show", !!err);
+  }
+  setInterval(renderStatus, 1000);
 
   // ---------- chart
   const cv = $("cv"), ctx = cv.getContext("2d"), plot = $("plot"), tip = $("tip");
@@ -424,8 +470,9 @@
 
   function connect() {
     const es = new EventSource("/events");
-    es.onopen = () => loadHistory().then(render);
+    es.onopen = () => { linkDown = false; lastMsgAt = Date.now(); sendClock(); loadHistory().then(render); };
     es.onmessage = ev => {
+      lastMsgAt = Date.now();
       const m = JSON.parse(ev.data);
       if (m.type === "reset") { history = []; latest = null; render(); return; }
       latest = m;
@@ -433,14 +480,12 @@
       if (history.length > 7200) history.splice(0, history.length - 7200);
       render();
     };
-    es.onerror = () => {
-      $("dot").classList.remove("ok");
-      $("status").textContent = "Lost connection to the bike computer — retrying…";
-    };
+    es.onerror = () => { linkDown = true; renderStatus(); };
   }
 
   render();
   connect();
+  setInterval(sendClock, 10 * 60 * 1000);   // in case the Pi's clock changes later
 
   // Keep the screen awake while the page is open (where supported).
   async function wake() { try { await navigator.wakeLock?.request("screen"); } catch (e) {} }

@@ -12,6 +12,53 @@ STALE_AFTER_S = 3.0
 HISTORY_LEN = 2 * 60 * 60
 # Normalized power uses a rolling average over this many seconds of riding.
 NP_WINDOW_S = 30
+# Correct the clock when the browser's time differs from the Pi's by more than this.
+CLOCK_TOLERANCE_S = 60
+
+
+class WallClock:
+    """Wall-clock time with an optional correction taken from the browser.
+
+    The Pi has no battery-backed clock. Without internet at boot its time can be
+    far off, which would give ride files wrong names and timestamps. The phone's
+    clock is always right, so the page sends it and we keep the difference.
+    """
+
+    def __init__(self):
+        self.offset = 0.0
+        self._lock = threading.Lock()
+        self._base = self._system_base()
+
+    @staticmethod
+    def _system_base():
+        # Changes only when the system clock is set (for example by NTP).
+        return time.time() - time.monotonic()
+
+    def _check_system_jump(self):
+        base = self._system_base()
+        if abs(base - self._base) > CLOCK_TOLERANCE_S:
+            # The system clock was set (internet came up); trust it again.
+            self._base = base
+            self.offset = 0.0
+
+    def now(self) -> float:
+        with self._lock:
+            self._check_system_jump()
+            return time.time() + self.offset
+
+    def correct(self, browser_now: float) -> bool:
+        """Take the browser's time (Unix seconds). Returns True if the offset changed."""
+        with self._lock:
+            self._check_system_jump()
+            diff = browser_now - time.time()
+            new = diff if abs(diff) > CLOCK_TOLERANCE_S else 0.0
+            if abs(new - self.offset) <= CLOCK_TOLERANCE_S:
+                return False
+            self.offset = new
+            return True
+
+
+clock = WallClock()
 
 
 @dataclass
@@ -31,6 +78,9 @@ class Ride:
         self.unknown_balance_side = unknown_balance_side
         self.logger = logger
         self._lock = threading.Lock()
+        # What the data source is doing, shown on the page when no data is coming in.
+        # level: "searching" (waiting for the pedals) or "error" (something to fix).
+        self.source_status = {"level": "searching", "text": "Starting…"}
         self.reset()
 
     def reset(self):
@@ -50,6 +100,9 @@ class Ride:
             self.started_wall = None
         if self.logger:
             self.logger.new_file()
+
+    def set_source_status(self, level: str, text: str):
+        self.source_status = {"level": level, "text": text}
 
     def add(self, r: Reading):
         with self._lock:
@@ -97,7 +150,7 @@ class Ride:
             moving = connected and (power > 0 or (cadence or 0) > 0)
             if moving:
                 if self.started_wall is None:
-                    self.started_wall = time.time()
+                    self.started_wall = clock.now()
                 self.elapsed += dt
                 self.n_moving += 1
                 self.sum_power += power
@@ -115,7 +168,7 @@ class Ride:
 
             sample = {
                 "t": round(self.elapsed, 1),
-                "wall": time.time(),
+                "wall": clock.now(),
                 "p": round(power),
                 "l": None if left is None else round(left),
                 "r": None if right is None else round(right),
@@ -131,6 +184,8 @@ class Ride:
                     self.logger.write(sample)
 
             sample["connected"] = connected
+            sample["source"] = self.source_status
+            sample["log_error"] = getattr(self.logger, "error", None)
             sample["stats"] = self._stats()
             return sample
 
