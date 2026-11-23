@@ -3,6 +3,7 @@
 import http.client
 import json
 import os
+import socket
 import subprocess
 import tempfile
 import threading
@@ -274,3 +275,88 @@ class NoPowerTest(unittest.TestCase):
             self.assertEqual(c.getresponse().status, 403)
         run.assert_not_called()
         c.close()
+
+
+class HostCheckTest(unittest.TestCase):
+    def test_allowed_hosts(self):
+        own = socket.gethostname()
+        for h in ("192.168.1.20:8080", "10.42.0.1:8080", "[fe80::1]:8080", "localhost:8080",
+                  f"{own}:8080", f"{own}.local:8080", "pi.lan", "pi.home.arpa:8080"):
+            self.assertTrue(bikecomputer.host_allowed(h), h)
+
+    def test_refused_hosts(self):
+        for h in ("evil.example:8080", "evil.example", "localhost.evil.com",
+                  "192.168.1.20.evil.com:8080", "", None):
+            self.assertFalse(bikecomputer.host_allowed(h), h)
+
+    def test_allow_host_option(self):
+        self.assertTrue(bikecomputer.host_allowed("Pi.Example.net:8080", ["pi.example.net"]))
+
+
+class RebindingTest(ServerBase):
+    def test_post_for_a_foreign_host_is_refused(self):
+        h = {"Content-Type": "application/json", "X-Bike-Computer": "1",
+             "Host": "evil.example:8080", "Origin": "http://evil.example:8080"}
+        self.assertEqual(self.request("POST", "/api/lap", {}, h)[0].status, 403)
+
+    def test_bad_content_length_is_a_bad_request(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.putrequest("POST", "/api/settings")
+        c.putheader("X-Bike-Computer", "1")
+        c.putheader("Content-Length", "abc")
+        c.endheaders()
+        r = c.getresponse()
+        self.assertEqual(r.status, 400)
+        c.close()
+
+
+class PowerOffRecordingTest(ServerBase):
+    def test_failed_power_off_keeps_recording(self):
+        denied = subprocess.CompletedProcess([], 1, "", "sudo: a password is required")
+        with mock.patch("bikecomputer.subprocess.run", return_value=denied):
+            self.assertEqual(self.post("/api/power", {"action": "poweroff"})[0].status, 500)
+        self.assertTrue(self.ride._recording)
+
+    def test_power_off_stops_recording(self):
+        ok = subprocess.CompletedProcess([], 0, "", "")
+        try:
+            with mock.patch("bikecomputer.subprocess.run", return_value=ok):
+                self.assertEqual(self.post("/api/power", {"action": "poweroff"})[0].status, 200)
+            self.assertFalse(self.ride._recording)
+        finally:
+            self.ride.resume_recording()
+
+
+class LockoutTest(unittest.TestCase):
+    def test_lockout_doubles_and_resets(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, "s.json")
+        bikecomputer.save_settings(path, {"pin": bikecomputer.PinGuard.make("1234")})
+        g = bikecomputer.PinGuard(path)
+        now = [1000.0]
+        with mock.patch("bikecomputer.time.monotonic", side_effect=lambda: now[0]):
+            pauses = []
+            for _ in range(3):
+                for _ in range(5):
+                    self.assertEqual(g.check("0000")[0], 401)
+                pauses.append(g.locked_until - now[0])
+                self.assertEqual(g.check("1234")[0], 429)       # locked, even for the right PIN
+                now[0] = g.locked_until + 1
+            self.assertEqual(pauses, [60, 120, 240])
+            self.assertIsNone(g.check("1234"))                  # right PIN: back to 1 minute
+            for _ in range(5):
+                g.check("0000")
+            self.assertEqual(g.locked_until - now[0], 60)
+
+    def test_lockout_is_capped_at_an_hour(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, "s.json")
+        bikecomputer.save_settings(path, {"pin": bikecomputer.PinGuard.make("1234")})
+        g = bikecomputer.PinGuard(path)
+        g.lockouts = 20                                   # many lockouts already
+        with mock.patch("bikecomputer.time.monotonic", return_value=1000.0):
+            for _ in range(5):
+                g.check("0000")
+            self.assertEqual(g.locked_until - 1000.0, 3600)

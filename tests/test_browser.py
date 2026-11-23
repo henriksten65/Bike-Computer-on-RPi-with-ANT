@@ -236,6 +236,46 @@ class BrowserTest(unittest.TestCase):
         self.assertLess(ms, 250, f"one redraw of a 4 h ride takes {ms:.0f} ms")
         self.shot(page, "dashboard-long-ride")
 
+    def test_lap_without_cadence_shows_a_dash(self):
+        # A sample whose finished lap has no cadence (a meter without it, or all coasting).
+        lap = {"n": 1, "elapsed": 60.0, "avg_p": 150, "np": 150, "max_p": 180, "if": None,
+               "avg_hr": None, "avg_c": None}
+        msg = {"type": "sample", "t": 61, "p": 150, "l": None, "r": None, "c": None, "h": None,
+               "lap": 2, "moving": True, "connected": True, "source": {}, "log_error": None,
+               "stats": {"avg_p": 150, "elapsed": 61, "avg_c": None, "laps": [lap],
+                         "lap": {**lap, "n": 2, "elapsed": 1.0}}}
+        ctx = self.browser.new_context(viewport=PHONE)
+        self.addCleanup(ctx.close)
+        page = ctx.new_page()
+        page.route("**/events", lambda route: route.fulfill(
+            body=f"data: {json.dumps(msg)}\n\n", content_type="text/event-stream"))
+        page.goto(self.base + "/")
+        page.wait_for_selector("#laps:not([hidden]) table", timeout=5000)
+        table = page.inner_text("#laps")
+        self.assertNotIn("null", table)
+        self.assertNotIn("undefined", table)
+
+    def test_wrong_pin_is_not_kept(self):
+        self.post("/api/settings", {"pin": "1357"})
+        try:
+            page = self.open("/rides")
+            answers = iter(["0000", "0000", "0000",          # first try: 3 wrong PINs
+                            "0000", "1357"])                 # second try: wrong, then right
+            # 3 + 1 = 4 wrong guesses in all: just under the 5-guess lockout.
+            page.on("dialog", lambda d: d.accept(next(answers)))
+            page.fill("#ftp", "240")
+            page.click("#ftpform button")
+            page.wait_for_function("document.getElementById('ftpmsg').classList.contains('bad')", timeout=5000)
+            # A refused PIN must not be remembered (it would be sent again by itself).
+            self.assertIsNone(page.evaluate("sessionStorage.getItem('bc.pin')"))
+            page.click("#ftpform button")
+            page.wait_for_function("document.getElementById('ftpmsg').textContent.includes('240')", timeout=5000)
+        finally:
+            req = urllib.request.Request(self.base + "/api/settings", data=b'{"pin": null, "ftp": null}',
+                                         method="POST", headers={"Content-Type": "application/json",
+                                                                 "X-Bike-Computer": "1", "X-PIN": "1357"})
+            urllib.request.urlopen(req, timeout=5)
+
     # ------------------------------------------------------------------ screenshots
 
     def test_layout_fits_the_phone(self):

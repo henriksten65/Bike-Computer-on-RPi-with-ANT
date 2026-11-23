@@ -268,6 +268,12 @@ class BleSource:
                 await asyncio.sleep(5)
 
     def _on_notify(self, _char, data: bytearray):
+        try:
+            self._decode(bytes(data))
+        except (struct.error, IndexError):
+            pass                       # a packet shorter than its flags say: skip it
+
+    def _decode(self, data):
         now = time.monotonic()
         flags, power = struct.unpack_from("<Hh", data, 0)
         off = 4

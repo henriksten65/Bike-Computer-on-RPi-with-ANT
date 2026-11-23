@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.1 (2026-11-23)
+
+### Fixed
+- Powering off while the pedals were still sending left a few-second extra ride file, which
+  could push a real ride out of the newest 10. Power off and shutdown now stop recording first.
+- Reset closed the ride file from another thread while it could be being written.
+- A web site could reach the Pi through the browser with DNS rebinding and reset the ride,
+  change settings, or power off without a PIN. Buttons that change something now only work at
+  the Pi's own addresses; `--allow-host` adds another name.
+- A phone set to the wrong time could change the Pi's correct internet time. The phone's time
+  is now only used while the Pi has no internet time.
+- PIN lockout: after 5 wrong PINs the pause now doubles each time (1, 2, 4 minutes, … up to an
+  hour) instead of always 1 minute. A 4-digit PIN now takes weeks to guess, not hours.
+- The Rides page could keep a wrong PIN and send it again by itself. A PIN is now remembered
+  only once the Pi has accepted it.
+- The lap table showed "null rpm" for a lap without cadence.
+- Ride files store times with their UTC offset, so rides during the autumn clock change get
+  the right times in TCX.
+- Keeping the newest 10 rides could, with a wrong clock, delete the ride being recorded.
+- An unreadable request header, or a too-short Bluetooth power packet, caused an error instead
+  of being ignored.
+
 ## 0.7.0 (2026-11-23)
 
 ### New

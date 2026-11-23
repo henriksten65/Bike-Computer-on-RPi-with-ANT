@@ -17,7 +17,9 @@ import os
 import queue
 import re
 import importlib.util
+import ipaddress
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -30,7 +32,7 @@ from ridelog import CsvLogger
 import ridelog
 import sources
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 log = logging.getLogger("bikecomputer")
@@ -72,13 +74,14 @@ POWER_COMMANDS = {
 
 def power_action(action, ride):
     """Run a power command. Returns (ok, message)."""
-    if ride.logger:
-        ride.logger.new_file()     # close the ride file cleanly first
+    ride.stop_recording()          # close the ride file; no new one while the Pi shuts down
     try:
         r = subprocess.run(POWER_COMMANDS[action], capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.TimeoutExpired) as e:
+        ride.resume_recording()
         return False, str(e)
     if r.returncode != 0:
+        ride.resume_recording()
         log.error("%s failed: %s", action, r.stderr.strip())
         return False, ("Not allowed to power off the Pi. Run deploy/install.sh once to allow it."
                        if "password" in r.stderr else r.stderr.strip() or f"exit code {r.returncode}")
@@ -113,17 +116,25 @@ class PinGuard:
     """Optional PIN for power off, restart and settings.
 
     Stored as a salted PBKDF2 hash in settings.json. After 5 wrong PINs in a row,
-    PIN checks are refused for a minute, so guessing a 4-digit PIN takes days.
+    PIN checks are refused for a while: 1 minute, then 2, 4, 8, ... up to an
+    hour each time. Guessing a 4-digit PIN (10,000 tries, 5 an hour) then takes
+    about 6 weeks on average instead of hours; longer PINs take far longer.
+    A right PIN starts over at 1 minute.
+
+    The lockout counts all wrong tries, whoever sends them: someone guessing
+    also locks you out for a while. That's the price of a lockout.
     """
 
     MAX_TRIES = 5
     LOCKOUT_S = 60
+    MAX_LOCKOUT_S = 3600
     PIN_RE = re.compile(r"^\d{4,8}$")
 
     def __init__(self, settings_path):
         self.settings_path = settings_path
         self.lock = threading.Lock()
         self.failures = 0
+        self.lockouts = 0            # lockouts in a row, for the doubling
         self.locked_until = 0.0
 
     @staticmethod
@@ -148,8 +159,10 @@ class PinGuard:
         if stored is None:
             return None
         with self.lock:
-            if time.monotonic() < self.locked_until:
-                return 429, "Too many wrong PINs. Wait a minute and try again."
+            wait = self.locked_until - time.monotonic()
+            if wait > 0:
+                minutes = max(1, round(wait / 60))
+                return 429, f"Too many wrong PINs. Try again in {minutes} minute{'s' if minutes > 1 else ''}."
             if not given:
                 return 401, "PIN required"
             try:
@@ -158,13 +171,48 @@ class PinGuard:
                 ok = False
             if ok:
                 self.failures = 0
+                self.lockouts = 0
                 return None
             self.failures += 1
             if self.failures >= self.MAX_TRIES:
                 self.failures = 0
-                self.locked_until = time.monotonic() + self.LOCKOUT_S
-                log.warning("%d wrong PINs: PIN checks paused for %d s", self.MAX_TRIES, self.LOCKOUT_S)
+                pause = min(self.MAX_LOCKOUT_S, self.LOCKOUT_S * 2 ** self.lockouts)
+                self.lockouts += 1
+                self.locked_until = time.monotonic() + pause
+                log.warning("%d wrong PINs: PIN checks paused for %d s", self.MAX_TRIES, pause)
             return 401, "Wrong PIN"
+
+
+# Local network names the Pi may be reached by. See host_allowed().
+LOCAL_SUFFIXES = (".local", ".lan", ".home", ".internal", ".home.arpa", ".localdomain")
+
+
+def host_allowed(host_header, extra=()):
+    """True if a request's Host is an address the Pi is really reached by.
+
+    Protects against DNS rebinding: a web site can point its own name at the
+    Pi's IP address, and then the browser treats the Pi as the same site, so
+    the header and Origin checks pass. Its Host header still carries that
+    site's name, though, so only IP addresses, localhost, local network names,
+    the Pi's own name and names given with --allow-host are accepted.
+    """
+    if not host_header:
+        return False
+    host = host_header.strip().lower()
+    if host.startswith("["):                       # [IPv6]:port
+        host = host[1:].split("]", 1)[0]
+    elif host.count(":") == 1:                     # name:port or IPv4:port
+        host = host.split(":", 1)[0]
+    host = host.rstrip(".")
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        pass
+    # Names ending in .local, .lan, .home, ... can't be registered in public DNS,
+    # so a web site can't point one of them at the Pi.
+    return (host in ("localhost", socket.gethostname().lower()) or host.endswith(LOCAL_SUFFIXES)
+            or host in {h.lower() for h in extra})
 
 
 def history_columns(history):
@@ -173,7 +221,7 @@ def history_columns(history):
     return {k: [h.get(k) for h in history] for k in keys}
 
 
-def make_handler(ride, hub, log_dir, settings_path=None, power_buttons=True):
+def make_handler(ride, hub, log_dir, settings_path=None, power_buttons=True, allow_hosts=()):
     pins = PinGuard(settings_path)
 
     class Handler(BaseHTTPRequestHandler):
@@ -270,11 +318,18 @@ def make_handler(ride, hub, log_dir, settings_path=None, power_buttons=True):
             """
             if self.headers.get("X-Bike-Computer") != "1":
                 return False
+            if not host_allowed(self.headers.get("Host"), allow_hosts):
+                log.warning("Refused a POST for host %r (add it with --allow-host if it's yours)",
+                            self.headers.get("Host"))
+                return False
             origin = self.headers.get("Origin")
             return not origin or urlsplit(origin).netloc == self.headers.get("Host")
 
         def _json_body(self):
-            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                return {}
             if not 0 < n <= 1024:
                 return {}
             try:
@@ -408,6 +463,8 @@ def main():
     ap.add_argument("--no-log", action="store_true", help="don't write ride CSV files")
     ap.add_argument("--no-power", action="store_true",
                     help="hide the power off / restart buttons (for testing on a computer)")
+    ap.add_argument("--allow-host", action="append", default=[], metavar="NAME",
+                    help="another name the Pi is reached by, for example pi.example.net (can be repeated)")
     ap.add_argument("--settings", default=os.path.join(HERE, "settings.json"),
                     help="where to keep settings changed on the page, such as FTP")
     args = ap.parse_args()
@@ -457,7 +514,8 @@ def main():
     threading.Thread(target=ticker, args=(ride, hub), name="ticker", daemon=True).start()
 
     server = ThreadingHTTPServer(("0.0.0.0", args.port), make_handler(ride, hub, args.log_dir, args.settings,
-                                                                         power_buttons=not args.no_power))
+                                                                         power_buttons=not args.no_power,
+                                                                         allow_hosts=args.allow_host))
     server.daemon_threads = True
     log.info("Bike computer %s: dashboard on http://0.0.0.0:%d  (source: %s)",
              __version__, args.port, args.source)
@@ -472,10 +530,9 @@ def main():
         pass
     finally:
         log.info("Shutting down")
+        ride.stop_recording()        # close the ride file, and open no new one
         if hasattr(src, "stop"):
             src.stop()
-        if ride.logger:
-            ride.logger.new_file()   # close the ride file
 
 
 if __name__ == "__main__":

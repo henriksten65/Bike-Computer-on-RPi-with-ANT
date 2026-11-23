@@ -12,6 +12,16 @@ from ride import ZONES, clock, intensity_factor, normalized_power, training_stre
 log = logging.getLogger("ridelog")
 
 COLUMNS = ["time_iso", "elapsed_s", "power_w", "left_w", "right_w", "cadence_rpm", "heart_rate_bpm", "lap", "ftp_w"]
+def _iso(wall):
+    """Local time with its UTC offset, e.g. 2026-11-23T16:22:08+01:00.
+
+    The offset keeps times unambiguous when the clocks go back in autumn (the
+    hour 02:00-03:00 happens twice). Files from before 0.7.1 have no offset;
+    they are read as local time.
+    """
+    return datetime.fromtimestamp(wall).astimezone().isoformat(timespec="seconds")
+
+
 # Ride file names; anything else in the folder is never listed, served or deleted.
 NAME_RE = re.compile(r"^ride-(\d{8})-(\d{6})\.csv$")
 TCX_NAME_RE = re.compile(r"^(ride-\d{8}-\d{6})\.tcx$")
@@ -39,7 +49,11 @@ class CsvLogger:
             return
         rides = sorted(n for n in os.listdir(self.dir)
                        if n.startswith("ride-") and n.endswith(".csv"))
+        current = os.path.basename(self.path) if self.path else None
         for name in rides[:-self.keep]:
+            if name == current:
+                # Older-looking than the rest only because of a wrong clock: keep it.
+                continue
             try:
                 os.remove(os.path.join(self.dir, name))
                 log.info("Deleted old ride file %s", name)
@@ -68,7 +82,7 @@ class CsvLogger:
                 self.w.writerow(COLUMNS)
                 log.info("Logging ride to %s", self.path)
                 self._prune()
-            self.w.writerow([datetime.fromtimestamp(s["wall"]).isoformat(timespec="seconds"),
+            self.w.writerow([_iso(s["wall"]),
                              s["t"], s["p"], s["l"], s["r"], s["c"], s.get("h"), s.get("lap"), ftp])
             self.f.flush()
             if self.error:
@@ -97,7 +111,7 @@ class CsvLogger:
             for row in rows[1:]:
                 try:
                     t = datetime.fromisoformat(row[0]).timestamp() + shift
-                    row[0] = datetime.fromtimestamp(t).isoformat(timespec="seconds")
+                    row[0] = _iso(t)
                 except (ValueError, IndexError):
                     pass
             start = datetime.fromisoformat(rows[1][0]).timestamp() if len(rows) > 1 else clock.now()
@@ -218,9 +232,12 @@ def list_rides(directory, current=None, ftp=None):
 # --------------------------------------------------------------------------- TCX export
 
 def _utc(time_iso):
-    """CSV time (the Pi's local time, no zone) -> TCX time in UTC."""
-    local = datetime.fromisoformat(time_iso).astimezone()   # naive = local time
-    return local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """CSV time -> TCX time in UTC. With an offset (0.7.1 and later) it's exact;
+    without one (older files) it's read as the Pi's local time."""
+    t = datetime.fromisoformat(time_iso)
+    if t.tzinfo is None:
+        t = t.astimezone()
+    return t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _int_or_none(v, lo, hi):

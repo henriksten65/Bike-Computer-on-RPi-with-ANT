@@ -310,9 +310,58 @@ class ShiftTimesTest(unittest.TestCase):
         self.assertTrue(names[0].startswith("ride-20260102-10"), names)
         with open(lg.path, newline="") as f:
             rows = list(csv.reader(f))
-        self.assertEqual([r[0] for r in rows[1:]],
+        self.assertEqual([r[0][:19] for r in rows[1:]],
                          ["2026-01-02T10:00:00", "2026-01-02T10:00:01", "2026-01-02T10:00:02"])
 
     def test_no_open_file_is_fine(self):
         CsvLogger(self.tmp.name).shift_times(3600)
         self.assertEqual(os.listdir(self.tmp.name), [])
+
+
+class FixesTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "Europe/Stockholm"
+        time.tzset()
+
+    def tearDown(self):
+        if self.old_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = self.old_tz
+        time.tzset()
+        self.tmp.cleanup()
+
+    def test_prune_never_deletes_the_file_being_written(self):
+        # 10 rides with names in the future (the clock was ahead when they were saved)
+        for d in range(10, 20):
+            open(os.path.join(self.tmp.name, f"ride-209901{d}-120000.csv"), "w").close()
+        lg = CsvLogger(self.tmp.name, keep=10)
+        lg.write(sample(1, wall=time.time()))
+        self.assertTrue(os.path.exists(lg.path))
+        lg.write(sample(2, wall=time.time()))
+        lg.new_file()
+        with open(lg.path) as f:
+            self.assertEqual(len(f.readlines()), 3)
+
+    def test_times_are_saved_with_their_utc_offset(self):
+        lg = CsvLogger(self.tmp.name)
+        wall = datetime(2026, 7, 1, 10, 0, 0).timestamp()
+        with mock.patch("ridelog.clock.now", return_value=wall):
+            lg.write(sample(0, wall=wall))
+        lg.new_file()
+        with open(lg.path, newline="") as f:
+            self.assertEqual(list(csv.reader(f))[1][0], "2026-07-01T10:00:00+02:00")
+
+    def test_tcx_times_stay_apart_when_the_clocks_go_back(self):
+        # 25 October 2026: 02:30 happens twice in Stockholm, first in summer time.
+        path = os.path.join(self.tmp.name, "ride-20261025-023000.csv")
+        with open(path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(ridelog.COLUMNS)
+            w.writerow(["2026-10-25T02:30:00+02:00", 1, 200, "", "", 90, "", 1, ""])
+            w.writerow(["2026-10-25T02:30:00+01:00", 2, 200, "", "", 90, "", 1, ""])
+        doc = ET.fromstring(ridelog.to_tcx(path))
+        times = [t.text for t in doc.iter("{http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2}Time")]
+        self.assertEqual(times, ["2026-10-25T00:30:00Z", "2026-10-25T01:30:00Z"])

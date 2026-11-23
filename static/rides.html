@@ -140,7 +140,7 @@
     return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
   };
   const fmtWhen = (iso, name) => {
-    // time_iso has no time zone: it is the Pi's local time, shown as is.
+    // time_iso has a UTC offset since 0.7.1; older files have none and are read as local time.
     const d = iso ? new Date(iso) : null;
     if (!d || isNaN(d)) return name;
     return d.toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -163,23 +163,30 @@
   const keepPin = p => { try { p ? sessionStorage.setItem(PIN_KEY, p) : sessionStorage.removeItem(PIN_KEY); } catch (e) {} };
 
   async function api(path, body) {
-    for (let attempt = 0; attempt < 3; attempt++) {
+    // A PIN is remembered (for this tab) only once the Pi has accepted it, so a
+    // mistyped one is never sent again by itself.
+    let pin = savedPin();
+    for (let attempt = 0; ; attempt++) {
       const r = await fetch(path, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Bike-Computer": "1", "X-PIN": savedPin() },
+        headers: { "Content-Type": "application/json", "X-Bike-Computer": "1", "X-PIN": pin },
         body: JSON.stringify(body),
       });
       const j = await r.json().catch(() => ({}));
-      if (r.ok) return j;
+      if (r.ok) {
+        if (pin) keepPin(pin);
+        return j;
+      }
       if (r.status === 401 && j.pin) {
+        keepPin(null);
+        if (attempt >= 3) throw new Error("Wrong PIN.");
         const p = prompt(j.error === "Wrong PIN" && attempt ? "Wrong PIN. Try again:" : "Enter the PIN:");
         if (p === null) throw new Error("Cancelled: the PIN is needed for this.");
-        keepPin(p.trim());
+        pin = p.trim();
         continue;
       }
       throw new Error(j.error || `Error ${r.status}`);
     }
-    throw new Error("Wrong PIN.");
   }
 
   async function load() {

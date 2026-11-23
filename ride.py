@@ -1,5 +1,6 @@
 """Ride state: turns raw power-meter readings into 1-second samples, timer and stats."""
 
+import os
 import threading
 import time
 from collections import deque
@@ -17,6 +18,12 @@ NP_WINDOW_S = 30
 HR_STALE_AFTER_S = 5.0
 # Correct the clock when the browser's time differs from the Pi's by more than this.
 CLOCK_TOLERANCE_S = 60
+# systemd-timesyncd creates this file once the clock is set from the internet.
+TIMESYNC_FLAG = "/run/systemd/timesync/synchronized"
+
+
+def system_clock_synced():
+    return os.path.exists(TIMESYNC_FLAG)
 
 
 class WallClock:
@@ -24,10 +31,13 @@ class WallClock:
 
     The Pi has no battery-backed clock. Without internet at boot its time can be
     far off, which would give ride files wrong names and timestamps. The phone's
-    clock is always right, so the page sends it and we keep the difference.
+    clock is nearly always right, so the page sends it and we keep the difference.
+    Once the Pi's own clock is set from the internet, it wins: a phone set to
+    the wrong time must not change a correct clock.
     """
 
-    def __init__(self):
+    def __init__(self, synced=system_clock_synced):
+        self._synced = synced
         self.offset = 0.0
         self._lock = threading.Lock()
         self._base = self._system_base()
@@ -58,7 +68,7 @@ class WallClock:
         with self._lock:
             self._check_system_jump()
             diff = browser_now - time.time()
-            new = diff if abs(diff) > CLOCK_TOLERANCE_S else 0.0
+            new = diff if abs(diff) > CLOCK_TOLERANCE_S and not self._synced() else 0.0
             if abs(new - self.offset) <= CLOCK_TOLERANCE_S:
                 return False
             self._shift += new - self.offset
@@ -217,6 +227,7 @@ class Ride:
         # What the data source is doing, shown on the page when no data is coming in.
         # level: "searching" (waiting for the pedals) or "error" (something to fix).
         self.source_status = {"level": "searching", "text": "Starting…"}
+        self._recording = True       # False while powering off / shutting down
         self.reset()
 
     def reset(self):
@@ -230,8 +241,25 @@ class Ride:
             self.laps = []             # finished laps (Totals)
             self.started_wall = None
             self._hr = None                 # (bpm, monotonic time) of the last heart rate
-        if self.logger:
-            self.logger.new_file()
+            # Inside the lock: never close the file while tick() is writing to it.
+            if self.logger:
+                self.logger.new_file()
+
+    def stop_recording(self):
+        """Close the ride file and write no more (before power off or shutdown).
+
+        Without this, the next second would open a new file if the pedals were
+        still sending, leaving a few-second "ride" behind.
+        """
+        with self._lock:
+            self._recording = False
+            if self.logger:
+                self.logger.new_file()
+
+    def resume_recording(self):
+        """Undo stop_recording(), for example when powering off failed."""
+        with self._lock:
+            self._recording = True
 
     def new_lap(self):
         """Finish the current lap and start the next. Returns False if the lap is empty."""
@@ -335,7 +363,7 @@ class Ride:
                 self.history.append(dict(sample))
                 if len(self.history) > HISTORY_LEN:
                     del self.history[: len(self.history) - HISTORY_LEN]
-                if self.logger:
+                if self.logger and self._recording:
                     self.logger.write(sample, ftp=self.ftp)
 
             sample["connected"] = connected

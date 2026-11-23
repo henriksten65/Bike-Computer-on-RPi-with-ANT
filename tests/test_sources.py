@@ -137,3 +137,12 @@ class BleHeartRateTest(unittest.TestCase):
         ride = FakeRide()
         sources.BleHeartRate(ride)._on_notify(None, bytearray([0x00, 99]))
         self.assertEqual(ride.hr, [99])
+
+
+class ShortPacketTest(unittest.TestCase):
+    def test_ble_power_packet_shorter_than_its_flags(self):
+        ride = FakeRide()
+        src = sources.BleSource(ride)
+        src._on_notify(None, bytearray([0x21, 0x00, 0xC8, 0x00]))   # says balance + crank, has neither
+        src._on_notify(None, bytearray([0x00]))
+        self.assertEqual(ride.readings, [])

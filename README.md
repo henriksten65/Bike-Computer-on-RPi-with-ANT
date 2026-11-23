@@ -146,7 +146,9 @@ green light stops flashing before you unplug it.
 Anyone on the same Wi-Fi can open the dashboard. To stop them powering off the Pi or changing
 your FTP, set a **PIN** (4 to 8 digits) on the **Rides** page. The page then asks for it before
 those actions, and remembers it until you close the tab. **Lap** and **Reset** never need it, so
-they stay quick while riding. After 5 wrong PINs, the Pi refuses PINs for a minute.
+they stay quick while riding. After 5 wrong PINs, the Pi refuses PINs for a minute, then 2, 4,
+8 minutes and so on (up to an hour) if the wrong guesses go on. The right PIN starts over at a
+minute.
 
 Forgot the PIN? On the Pi, remove the `"pin"` entry from `settings.json` and restart the
 service.
@@ -186,6 +188,8 @@ Each ride is saved as `rides/ride-YYYYMMDD-HHMMSS.csv`, one row per second of mo
 
 `time_iso, elapsed_s, power_w, left_w, right_w, cadence_rpm, heart_rate_bpm, lap, ftp_w`
 
+`time_iso` is the local time with its UTC offset, for example `2026-11-23T16:22:08+01:00`.
+
 Empty values mean the meter didn't send them (no balance, no strap). A new file starts on
 **Reset** and whenever the program starts. Only the newest 10 are kept, so download the ones
 you want to keep from the **Rides** page.
@@ -203,7 +207,8 @@ GPS or distance, so the sites treat it as an indoor ride. Pauses show up as gaps
 
 The Pi has no battery-backed clock. Without internet at boot its time can be wrong, so the
 dashboard sends the phone's time and the Pi uses that for file names and timestamps. When the
-time is corrected during a ride, the rows already saved are corrected too.
+time is corrected during a ride, the rows already saved are corrected too. Once the Pi has the
+time from the internet, it keeps its own clock and ignores the phone's.
 
 ## Updating
 
@@ -236,6 +241,7 @@ Pass these to `bikecomputer.py`. For the service, add them to the `ExecStart` li
 | `--no-log` | Don't save CSV files |
 | `--settings FILE` | Where to keep settings changed on the page, FTP and PIN (default: `settings.json`) |
 | `--no-power` | Hide the power off and restart buttons (for running on a computer) |
+| `--allow-host NAME` | Another name the Pi is reached by, such as `pi.example.net` (see below; can be repeated) |
 | `--version` | Show the version |
 
 ### About the left/right split
@@ -247,6 +253,14 @@ When the meter says "unknown", the program assumes right for ANT+ and left for B
 
 Check it once: push mostly with one leg. If the wrong side goes up, add
 `--unknown-balance-side` with the other side to the options.
+
+### Which addresses work
+
+The dashboard works at any address. Buttons that change something (Lap, Reset, settings,
+power off) only work when the address is an IP address, `localhost`, the Pi's name, or a local
+network name ending in `.local`, `.lan`, `.home`, `.internal`, `.home.arpa` or `.localdomain`.
+That stops a web site from reaching the Pi through your browser ("DNS rebinding"). If you use
+another name for the Pi, add it with `--allow-host`.
 
 ### ANT+ or Bluetooth?
 

@@ -148,19 +148,19 @@ class HeartRateTest(unittest.TestCase):
 
 class WallClockTest(unittest.TestCase):
     def test_small_difference_is_ignored(self):
-        c = WallClock()
+        c = WallClock(synced=lambda: False)
         self.assertFalse(c.correct(time.time() + 10))
         self.assertEqual(c.offset, 0)
 
     def test_large_difference_is_applied(self):
-        c = WallClock()
+        c = WallClock(synced=lambda: False)
         self.assertTrue(c.correct(time.time() + 3600))
         self.assertAlmostEqual(c.offset, 3600, delta=1)
         self.assertAlmostEqual(c.now(), time.time() + 3600, delta=1)
         self.assertFalse(c.correct(time.time() + 3610))   # already about right
 
     def test_dropped_when_system_clock_is_set(self):
-        c = WallClock()
+        c = WallClock(synced=lambda: False)
         c.correct(time.time() + 3600)
         real = time.time()
         with mock.patch("ride.time.time", return_value=real + 3600):   # NTP set the clock
@@ -280,7 +280,7 @@ class CadenceAndZonesTest(unittest.TestCase):
 
 class ClockShiftTest(unittest.TestCase):
     def test_browser_correction_is_reported_once(self):
-        c = WallClock()
+        c = WallClock(synced=lambda: False)
         c.correct(time.time() + 3600)
         self.assertAlmostEqual(c.pop_shift(), 3600, delta=1)
         self.assertEqual(c.pop_shift(), 0)
@@ -288,13 +288,13 @@ class ClockShiftTest(unittest.TestCase):
         self.assertAlmostEqual(c.pop_shift(), -3600, delta=1)
 
     def test_system_clock_set_by_ntp(self):
-        c = WallClock()
+        c = WallClock(synced=lambda: False)
         real = time.time()
         with mock.patch("ride.time.time", return_value=real + 7200):   # clock was 2 h behind
             self.assertAlmostEqual(c.pop_shift(), 7200, delta=1)
 
     def test_ntp_after_browser_correction(self):
-        c = WallClock()
+        c = WallClock(synced=lambda: False)
         c.correct(time.time() + 7200)                  # the phone already fixed it
         c.pop_shift()
         real = time.time()
@@ -307,3 +307,46 @@ class ClockShiftTest(unittest.TestCase):
         with mock.patch("ride.clock.pop_shift", return_value=120.0):
             r.tick(1.0)
         logger.shift_times.assert_called_once_with(120.0)
+
+
+class RecordingTest(unittest.TestCase):
+    def test_no_new_file_after_stop_recording(self):
+        logger = mock.Mock(error=None)
+        r = Ride(logger=logger)
+        ride_through(r, [200] * 2)
+        self.assertEqual(logger.write.call_count, 2)
+        r.stop_recording()
+        ride_through(r, [200] * 3)                   # pedals still sending
+        self.assertEqual(logger.write.call_count, 2)
+        r.resume_recording()
+        ride_through(r, [200])
+        self.assertEqual(logger.write.call_count, 3)
+
+    def test_reset_closes_the_file_under_the_lock(self):
+        r = Ride(logger=mock.Mock(error=None))
+        seen = []
+        r.logger.new_file.side_effect = lambda: seen.append(r._lock.locked())
+        r.reset()
+        self.assertEqual(seen, [True])
+
+
+class SyncedClockTest(unittest.TestCase):
+    def test_phone_is_ignored_when_the_pi_clock_is_synced(self):
+        c = WallClock(synced=lambda: True)
+        self.assertFalse(c.correct(time.time() + 3600))
+        self.assertEqual(c.offset, 0)
+
+    def test_earlier_correction_is_dropped_once_synced(self):
+        synced = [False]
+        c = WallClock(synced=lambda: synced[0])
+        c.correct(time.time() + 3600)
+        c.pop_shift()
+        synced[0] = True                                 # internet time arrived
+        self.assertTrue(c.correct(time.time() + 3600))   # the phone sends its time again
+        self.assertEqual(c.offset, 0)
+        self.assertAlmostEqual(c.pop_shift(), -3600, delta=1)
+
+    def test_default_uses_the_timesyncd_flag(self):
+        with mock.patch("ride.os.path.exists", return_value=True) as exists:
+            self.assertTrue(ride.system_clock_synced())
+        exists.assert_called_once_with(ride.TIMESYNC_FLAG)

@@ -386,7 +386,7 @@
       `<td>${fmtTime(l.elapsed)}</td><td>${l.avg_p} W</td><td>${l.np ?? "—"}${l.np != null ? " W" : ""}</td>` +
       `<td>${l.max_p} W</td>` + (ftp ? `<td>${l.if != null ? l.if.toFixed(2) : "—"}</td>` : "") +
       (hasHr ? `<td>${l.avg_hr ?? "—"}${l.avg_hr != null ? " bpm" : ""}</td>` : "") +
-      `<td>${l.avg_c} rpm</td></tr>`;
+      `<td>${l.avg_c != null ? `${l.avg_c} rpm` : "—"}</td></tr>`;
     box.innerHTML = `<table><thead><tr><th>Lap</th><th>Time</th><th>Avg</th><th>NP</th><th>Max</th>` +
       (ftp ? `<th>IF</th>` : "") + (hasHr ? `<th>HR</th>` : "") + `<th>Cadence</th></tr></thead><tbody>` +
       laps.map(l => row(l, false)).join("") + (lap && lap.elapsed > 0 ? row(lap, true) : "") + `</tbody></table>`;
