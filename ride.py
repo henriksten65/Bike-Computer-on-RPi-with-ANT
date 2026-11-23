@@ -79,6 +79,43 @@ def normalized_power(powers):
     return round((sum4 / (len(powers) - NP_WINDOW_S + 1)) ** 0.25)
 
 
+# --------------------------------------------------------------------------- training numbers
+
+# Power zones as a share of FTP (Coggan): (number, name, upper limit as a fraction of FTP).
+ZONES = [
+    (1, "Active recovery", 0.55),
+    (2, "Endurance", 0.75),
+    (3, "Tempo", 0.90),
+    (4, "Threshold", 1.05),
+    (5, "VO2 max", 1.20),
+    (6, "Anaerobic", 1.50),
+    (7, "Neuromuscular", None),
+]
+
+
+def zone(power, ftp):
+    """Zone number (1-7) for a power value, or None without an FTP."""
+    if not ftp:
+        return None
+    for n, _name, upper in ZONES:
+        if upper is None or power <= upper * ftp:
+            return n
+
+
+def intensity_factor(np_w, ftp):
+    """IF = NP / FTP. About 0.75 for an endurance ride, 1.0 for an all-out hour."""
+    if not ftp or np_w is None:
+        return None
+    return round(np_w / ftp, 2)
+
+
+def training_stress(seconds, np_w, ftp):
+    """TSS = hours x IF^2 x 100. One hour at FTP = 100."""
+    if not ftp or np_w is None:
+        return None
+    return round(seconds / 3600 * (np_w / ftp) ** 2 * 100)
+
+
 @dataclass
 class Reading:
     """One update from a power meter, already decoded by a source."""
@@ -89,12 +126,72 @@ class Reading:
     ts: float = field(default_factory=time.monotonic)
 
 
+class Totals:
+    """Running totals for the whole ride or one lap, one call per moving second."""
+
+    def __init__(self, start_t=0.0):
+        self.start_t = start_t       # ride moving time when this started, s
+        self.seconds = 0
+        self.sum_power = self.sum_left = self.sum_right = 0.0
+        self.sum_cadence = 0.0
+        self.max_power = 0
+        self.energy_j = 0.0
+        self.sum_hr = 0.0
+        self.n_hr = 0
+        self.max_hr = 0
+        self._np_window = deque(maxlen=NP_WINDOW_S)  # last 30 s of power
+        self._np_sum4 = 0.0                        # sum of (30 s average) ** 4
+        self._np_n = 0
+
+    def add(self, power, cadence, left, right, hr, dt=1.0):
+        self.seconds += 1
+        self.sum_power += power
+        self.sum_cadence += cadence or 0
+        self.sum_left += left or 0
+        self.sum_right += right or 0
+        self.max_power = max(self.max_power, power)
+        self.energy_j += power * dt
+        if hr is not None:
+            self.sum_hr += hr
+            self.n_hr += 1
+            self.max_hr = max(self.max_hr, hr)
+        # Normalized power: 4th-power mean of the 30 s rolling average,
+        # counted once the first full 30 s window is available.
+        self._np_window.append(power)
+        if len(self._np_window) == NP_WINDOW_S:
+            self._np_sum4 += (sum(self._np_window) / NP_WINDOW_S) ** 4
+            self._np_n += 1
+
+    def np(self):
+        return round((self._np_sum4 / self._np_n) ** 0.25) if self._np_n else None
+
+    def to_dict(self, ftp=None):
+        n = self.seconds or 1
+        np_w = self.np()
+        return {
+            "avg_p": round(self.sum_power / n),
+            "avg_l": round(self.sum_left / n),
+            "avg_r": round(self.sum_right / n),
+            "avg_c": round(self.sum_cadence / n),
+            "max_p": round(self.max_power),
+            "np": np_w,
+            "if": intensity_factor(np_w, ftp),
+            "tss": training_stress(self.seconds, np_w, ftp),
+            "avg_hr": round(self.sum_hr / self.n_hr) if self.n_hr else None,
+            "max_hr": self.max_hr or None,
+            "kj": round(self.energy_j / 1000, 1),
+            "elapsed": float(self.seconds),
+            "start_t": round(self.start_t, 1),
+        }
+
+
 class Ride:
-    def __init__(self, unknown_balance_side: str = "right", logger=None):
+    def __init__(self, unknown_balance_side: str = "right", logger=None, ftp=None):
         # Which pedal an "unknown reference" balance value refers to. ANT+ dual-sided
         # meters normally flag it as right; BLE ones normally flag it as left.
         self.unknown_balance_side = unknown_balance_side
         self.logger = logger
+        self.ftp = ftp               # functional threshold power, W (None = not set)
         self._lock = threading.Lock()
         # What the data source is doing, shown on the page when no data is coming in.
         # level: "searching" (waiting for the pedals) or "error" (something to fix).
@@ -107,21 +204,27 @@ class Ride:
             self._last_reading = None  # last Reading, for stale detection
             self.elapsed = 0.0         # moving time, seconds
             self.history = []          # list of sample dicts
-            self.sum_power = self.sum_left = self.sum_right = 0.0
-            self.sum_cadence = 0.0
-            self.n_moving = 0
-            self.max_power = 0
-            self.energy_j = 0.0
-            self._np_window = deque(maxlen=NP_WINDOW_S)  # last 30 s of power while moving
-            self._np_sum4 = 0.0                        # sum of (30 s average) ** 4
-            self._np_n = 0
+            self.total = Totals()      # the whole ride
+            self.lap = Totals()        # the lap in progress
+            self.laps = []             # finished laps (Totals)
             self.started_wall = None
             self._hr = None                 # (bpm, monotonic time) of the last heart rate
-            self.sum_hr = 0.0
-            self.n_hr = 0
-            self.max_hr = 0
         if self.logger:
             self.logger.new_file()
+
+    def new_lap(self):
+        """Finish the current lap and start the next. Returns False if the lap is empty."""
+        with self._lock:
+            if self.lap.seconds == 0:
+                return False
+            self.laps.append(self.lap)
+            self.lap = Totals(start_t=self.elapsed)
+            return True
+
+    def _lap_dict(self, totals, n):
+        d = totals.to_dict(self.ftp)
+        d["n"] = n
+        return d
 
     def set_source_status(self, level: str, text: str):
         self.source_status = {"level": level, "text": text}
@@ -184,23 +287,8 @@ class Ride:
                 if self.started_wall is None:
                     self.started_wall = clock.now()
                 self.elapsed += dt
-                self.n_moving += 1
-                self.sum_power += power
-                self.sum_cadence += cadence or 0
-                self.sum_left += left or 0
-                self.sum_right += right or 0
-                self.max_power = max(self.max_power, power)
-                self.energy_j += power * dt
-                if hr is not None:
-                    self.sum_hr += hr
-                    self.n_hr += 1
-                    self.max_hr = max(self.max_hr, hr)
-                # Normalized power: 4th-power mean of the 30 s rolling average,
-                # counted once the first full 30 s window is available.
-                self._np_window.append(power)
-                if len(self._np_window) == NP_WINDOW_S:
-                    self._np_sum4 += (sum(self._np_window) / NP_WINDOW_S) ** 4
-                    self._np_n += 1
+                self.total.add(power, cadence, left, right, hr, dt)
+                self.lap.add(power, cadence, left, right, hr, dt)
 
             sample = {
                 "t": round(self.elapsed, 1),
@@ -210,6 +298,7 @@ class Ride:
                 "r": None if right is None else round(right),
                 "c": None if cadence is None else round(cadence),
                 "h": hr,
+                "lap": len(self.laps) + 1,
                 "moving": moving,
             }
             # Only record graph points while moving, so pauses don't flatten the graph.
@@ -227,19 +316,13 @@ class Ride:
             return sample
 
     def _stats(self) -> dict:
-        n = self.n_moving or 1
-        return {
-            "avg_p": round(self.sum_power / n),
-            "avg_l": round(self.sum_left / n),
-            "avg_r": round(self.sum_right / n),
-            "avg_c": round(self.sum_cadence / n),
-            "max_p": round(self.max_power),
-            "np": round((self._np_sum4 / self._np_n) ** 0.25) if self._np_n else None,
-            "avg_hr": round(self.sum_hr / self.n_hr) if self.n_hr else None,
-            "max_hr": self.max_hr or None,
-            "kj": round(self.energy_j / 1000, 1),
-            "elapsed": round(self.elapsed, 1),
-        }
+        st = self.total.to_dict(self.ftp)
+        st["elapsed"] = round(self.elapsed, 1)
+        st["ftp"] = self.ftp
+        st["lap"] = self._lap_dict(self.lap, len(self.laps) + 1)
+        # As dicts each time, so IF and TSS follow a changed FTP.
+        st["laps"] = [self._lap_dict(t, i + 1) for i, t in enumerate(self.laps)]
+        return st
 
     def snapshot(self) -> dict:
         with self._lock:

@@ -82,7 +82,30 @@ def power_action(action, ride):
     return True, ""
 
 
-def make_handler(ride, hub, log_dir):
+# FTP limits accepted from the page, W.
+FTP_MIN, FTP_MAX = 50, 600
+
+
+def load_settings(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        log.warning("Ignoring unreadable settings file %s: %s", path, e)
+        return {}
+
+
+def save_settings(path, settings):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(settings, f, indent=2)
+    os.replace(tmp, path)        # never leave a half-written file
+
+
+def make_handler(ride, hub, log_dir, settings_path=None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             pass
@@ -116,8 +139,9 @@ def make_handler(ride, hub, log_dir):
                 self._page("rides.html")
             elif path == "/api/rides":
                 current = ride.logger.path if ride.logger and ride.logger.f else None
-                rides = ridelog.list_rides(log_dir, current=current)
-                self._send(200, json.dumps({"rides": rides, "version": __version__}).encode(), "application/json")
+                rides = ridelog.list_rides(log_dir, current=current, ftp=ride.ftp)
+                self._send(200, json.dumps({"rides": rides, "version": __version__,
+                                            "ftp": ride.ftp}).encode(), "application/json")
             elif path.startswith("/rides/") and ridelog.NAME_RE.match(path[len("/rides/"):]):
                 name = path[len("/rides/"):]
                 try:
@@ -187,7 +211,7 @@ def make_handler(ride, hub, log_dir):
 
         def do_POST(self):
             path = urlsplit(self.path).path
-            if path not in ("/api/reset", "/api/clock", "/api/power"):
+            if path not in ("/api/reset", "/api/clock", "/api/power", "/api/lap", "/api/settings"):
                 self._send(404, b"not found", "text/plain")
                 return
             if not self._post_allowed():
@@ -196,6 +220,24 @@ def make_handler(ride, hub, log_dir):
             if path == "/api/reset":
                 ride.reset()
                 hub.publish({"type": "reset"})
+            elif path == "/api/lap":
+                if ride.new_lap():
+                    log.info("Lap %d started", len(ride.laps) + 1)
+            elif path == "/api/settings":
+                ftp = self._json_body().get("ftp", "missing")
+                if ftp is not None and (not isinstance(ftp, int) or isinstance(ftp, bool)
+                                        or not FTP_MIN <= ftp <= FTP_MAX):
+                    self._send(400, f"FTP must be {FTP_MIN} to {FTP_MAX} W".encode(), "text/plain")
+                    return
+                ride.ftp = ftp
+                log.info("FTP set to %s", f"{ftp} W" if ftp else "none")
+                if settings_path:
+                    try:
+                        save_settings(settings_path, {**load_settings(settings_path), "ftp": ftp})
+                    except OSError as e:
+                        log.error("Could not save the settings: %s", e)
+                        self._send(500, f"Could not save the FTP: {e}".encode(), "text/plain; charset=utf-8")
+                        return
             elif path == "/api/power":
                 action = self._json_body().get("action")
                 if action not in POWER_COMMANDS:
@@ -254,6 +296,8 @@ def main():
     ap.add_argument("--keep-rides", type=int, default=10,
                     help="keep only this many newest ride CSV files (0 = keep all)")
     ap.add_argument("--no-log", action="store_true", help="don't write ride CSV files")
+    ap.add_argument("--settings", default=os.path.join(HERE, "settings.json"),
+                    help="where to keep settings changed on the page, such as FTP")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
@@ -270,7 +314,11 @@ def main():
                 f"or install it there:  .venv/bin/pip install -r requirements.txt")
 
     side = args.unknown_balance_side or ("left" if args.source == "ble" else "right")
-    ride = Ride(unknown_balance_side=side,
+    settings = load_settings(args.settings)
+    ftp = settings.get("ftp")
+    if not (isinstance(ftp, int) and FTP_MIN <= ftp <= FTP_MAX):
+        ftp = None
+    ride = Ride(unknown_balance_side=side, ftp=ftp,
                 logger=None if args.no_log else CsvLogger(args.log_dir, keep=args.keep_rides))
     hub = Hub()
 
@@ -285,7 +333,7 @@ def main():
 
     threading.Thread(target=ticker, args=(ride, hub), name="ticker", daemon=True).start()
 
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), make_handler(ride, hub, args.log_dir))
+    server = ThreadingHTTPServer(("0.0.0.0", args.port), make_handler(ride, hub, args.log_dir, args.settings))
     server.daemon_threads = True
     log.info("Bike computer %s: dashboard on http://0.0.0.0:%d  (source: %s)",
              __version__, args.port, args.source)

@@ -7,11 +7,11 @@ import re
 import time
 from datetime import datetime, timezone
 
-from ride import clock, normalized_power
+from ride import clock, intensity_factor, normalized_power, training_stress
 
 log = logging.getLogger("ridelog")
 
-COLUMNS = ["time_iso", "elapsed_s", "power_w", "left_w", "right_w", "cadence_rpm", "heart_rate_bpm"]
+COLUMNS = ["time_iso", "elapsed_s", "power_w", "left_w", "right_w", "cadence_rpm", "heart_rate_bpm", "lap"]
 # Ride file names; anything else in the folder is never listed, served or deleted.
 NAME_RE = re.compile(r"^ride-(\d{8})-(\d{6})\.csv$")
 TCX_NAME_RE = re.compile(r"^(ride-\d{8}-\d{6})\.tcx$")
@@ -69,7 +69,7 @@ class CsvLogger:
                 log.info("Logging ride to %s", self.path)
                 self._prune()
             self.w.writerow([datetime.fromtimestamp(s["wall"]).isoformat(timespec="seconds"),
-                             s["t"], s["p"], s["l"], s["r"], s["c"], s.get("h")])
+                             s["t"], s["p"], s["l"], s["r"], s["c"], s.get("h"), s.get("lap")])
             self.f.flush()
             if self.error:
                 log.info("Saving the ride works again")
@@ -106,6 +106,7 @@ def summarize(path):
     """Stats for one saved ride file (only moving seconds are in the file)."""
     powers, cads, hrs, lefts, rights = [], [], [], [], []
     first = last_elapsed = None
+    laps = 1
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
             p = _num(row.get("power_w"))
@@ -114,6 +115,7 @@ def summarize(path):
             first = first or row.get("time_iso")
             last_elapsed = _num(row.get("elapsed_s"))
             powers.append(p)
+            laps = max(laps, int(_num(row.get("lap")) or 1))
             for lst, key in ((cads, "cadence_rpm"), (hrs, "heart_rate_bpm"),
                              (lefts, "left_w"), (rights, "right_w")):
                 v = _num(row.get(key))
@@ -133,14 +135,19 @@ def summarize(path):
         "max_hr": round(max(hrs)) if hrs else None,
         "balance_l": round(100 * sum(lefts) / bal) if bal > 0 else None,
         "kj": round(sum(powers) / 1000, 1),   # 1 s samples: W x 1 s = J
+        "laps": laps,
     }
 
 
 _cache = {}   # path -> ((mtime, size), summary)
 
 
-def list_rides(directory, current=None):
-    """All saved rides, newest first, with stats. `current` = path being written now."""
+def list_rides(directory, current=None, ftp=None):
+    """All saved rides, newest first, with stats. `current` = path being written now.
+
+    IF and TSS use the FTP given here (the current setting): the files don't
+    record what the FTP was on the day.
+    """
     try:
         names = [n for n in os.listdir(directory) if NAME_RE.match(n)]
     except FileNotFoundError:
@@ -162,7 +169,9 @@ def list_rides(directory, current=None):
             continue
         out.append({"name": name, "size": st.st_size,
                     "in_progress": current is not None and os.path.abspath(path) == os.path.abspath(current),
-                    **summary})
+                    **summary,
+                    "if": intensity_factor(summary["np"], ftp),
+                    "tss": training_stress(summary["moving_s"], summary["np"], ftp)})
     return out
 
 
@@ -181,50 +190,22 @@ def _int_or_none(v, lo, hi):
     return max(lo, min(hi, round(n)))
 
 
-def to_tcx(path, version="0.0.0"):
-    """Convert a saved ride (CSV) to TCX for Strava, Garmin Connect, intervals.icu, ...
-
-    One lap, one trackpoint per second of moving time with power, cadence and
-    heart rate. No GPS or distance: the uploader treats it as an indoor ride.
-    Pauses aren't in the file, so they show up as gaps in the time.
-    """
-    points = []
-    with open(path, newline="") as f:
-        for row in csv.DictReader(f):
-            if _num(row.get("power_w")) is None or not row.get("time_iso"):
-                continue
-            try:
-                t = _utc(row["time_iso"])
-            except ValueError:
-                continue
-            points.append((t,
-                           _int_or_none(row.get("power_w"), 0, 65535),
-                           _int_or_none(row.get("cadence_rpm"), 0, 254),       # TCX limit
-                           _int_or_none(row.get("heart_rate_bpm"), 1, 255)))
-    if not points:
-        raise ValueError("the ride has no data")
-
-    st = summarize(path)
-    start = points[0][0]
-    out = ['<?xml version="1.0" encoding="UTF-8"?>',
-           '<TrainingCenterDatabase'
-           ' xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"'
-           ' xmlns:ns3="http://www.garmin.com/xmlschemas/ActivityExtension/v2"'
-           ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
-           '<Activities>',
-           '<Activity Sport="Biking">',
-           f'<Id>{start}</Id>',
-           f'<Lap StartTime="{start}">',
+def _lap_xml(points):
+    """One TCX <Lap> for a list of (time, watts, cadence, hr) points."""
+    watts = [p for _, p, _, _ in points]
+    cads = [c for _, _, c, _ in points if c is not None]
+    hrs = [h for _, _, _, h in points if h is not None]
+    out = [f'<Lap StartTime="{points[0][0]}">',
            f'<TotalTimeSeconds>{len(points)}</TotalTimeSeconds>',
            '<DistanceMeters>0</DistanceMeters>',
            # On the bike, kJ of work is about the same number as kcal burned.
-           f'<Calories>{round(st["kj"])}</Calories>']
-    if st["avg_hr"] is not None:
-        out.append(f'<AverageHeartRateBpm><Value>{st["avg_hr"]}</Value></AverageHeartRateBpm>')
-        out.append(f'<MaximumHeartRateBpm><Value>{st["max_hr"]}</Value></MaximumHeartRateBpm>')
+           f'<Calories>{round(sum(watts) / 1000)}</Calories>']
+    if hrs:
+        out.append(f'<AverageHeartRateBpm><Value>{round(sum(hrs) / len(hrs))}</Value></AverageHeartRateBpm>')
+        out.append(f'<MaximumHeartRateBpm><Value>{max(hrs)}</Value></MaximumHeartRateBpm>')
     out.append('<Intensity>Active</Intensity>')
-    if st["avg_c"] is not None:
-        out.append(f'<Cadence>{min(254, st["avg_c"])}</Cadence>')
+    if cads:
+        out.append(f'<Cadence>{min(254, round(sum(cads) / len(cads)))}</Cadence>')
     out.append('<TriggerMethod>Manual</TriggerMethod>')
     out.append('<Track>')
     for t, p, c, h in points:
@@ -237,10 +218,50 @@ def to_tcx(path, version="0.0.0"):
         out.append("".join(tp))
     out.append('</Track>')
     out.append('<Extensions><ns3:LX>'
-               f'<ns3:AvgWatts>{st["avg_p"]}</ns3:AvgWatts>'
-               f'<ns3:MaxWatts>{st["max_p"]}</ns3:MaxWatts>'
+               f'<ns3:AvgWatts>{round(sum(watts) / len(watts))}</ns3:AvgWatts>'
+               f'<ns3:MaxWatts>{max(watts)}</ns3:MaxWatts>'
                '</ns3:LX></Extensions>')
     out.append('</Lap>')
+    return out
+
+
+def to_tcx(path, version="0.0.0"):
+    """Convert a saved ride (CSV) to TCX for Strava, Garmin Connect, intervals.icu, ...
+
+    One TCX lap per lap pressed on the dashboard, one trackpoint per second of
+    moving time with power, cadence and heart rate. No GPS or distance: the
+    uploader treats it as an indoor ride. Pauses aren't in the file, so they
+    show up as gaps in the time.
+    """
+    laps = {}   # lap number -> points, in file order
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f):
+            if _num(row.get("power_w")) is None or not row.get("time_iso"):
+                continue
+            try:
+                t = _utc(row["time_iso"])
+            except ValueError:
+                continue
+            lap = int(_num(row.get("lap")) or 1)
+            laps.setdefault(lap, []).append((
+                t,
+                _int_or_none(row.get("power_w"), 0, 65535),
+                _int_or_none(row.get("cadence_rpm"), 0, 254),       # TCX limit
+                _int_or_none(row.get("heart_rate_bpm"), 1, 255)))
+    if not laps:
+        raise ValueError("the ride has no data")
+
+    first = laps[min(laps)][0][0]
+    out = ['<?xml version="1.0" encoding="UTF-8"?>',
+           '<TrainingCenterDatabase'
+           ' xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"'
+           ' xmlns:ns3="http://www.garmin.com/xmlschemas/ActivityExtension/v2"'
+           ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
+           '<Activities>',
+           '<Activity Sport="Biking">',
+           f'<Id>{first}</Id>']
+    for n in sorted(laps):
+        out += _lap_xml(laps[n])
     # The recording device, shown by Strava and others as "Bike computer".
     major, minor, *_ = (version.split(".") + ["0", "0"])
     out.append('<Creator xsi:type="Device_t"><Name>Bike computer</Name>'
@@ -251,4 +272,3 @@ def to_tcx(path, version="0.0.0"):
     out.append('</Activities>')
     out.append('</TrainingCenterDatabase>')
     return ("\n".join(out) + "\n").encode("utf-8")
-

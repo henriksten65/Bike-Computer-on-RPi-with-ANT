@@ -22,6 +22,9 @@
     --ok:            #0ca30c;
     --warn:          #c98500;
     --bad:           #e5484d;
+    /* power zones 1-7 */
+    --z1: #8e8d87; --z2: #3b82f6; --z3: #22a06b; --z4: #e0b000;
+    --z5: #f07a1a; --z6: #e5484d; --z7: #a35ee8;
   }
   @media (prefers-color-scheme: light) {
     :root:not([data-theme="dark"]) {
@@ -40,6 +43,8 @@
       --ok:            #008300;
       --warn:          #b07000;
       --bad:           #c62a2f;
+      --z1: #75746f; --z2: #2563eb; --z3: #148a5a; --z4: #b38b00;
+      --z5: #d9640a; --z6: #c62a2f; --z7: #8a45cf;
     }
   }
   :root[data-theme="dark"] { color-scheme: dark; }
@@ -100,6 +105,22 @@
   .balance .mid50 { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--text-primary); opacity: .6; }
   .baltext { text-align: center; font-size: 14px; color: var(--text-secondary); margin-top: 6px; }
 
+  .btn.lap { color: var(--text-primary); font-weight: 600; border-color: var(--text-muted); min-width: 64px; justify-content: center; }
+  .btn.lap.flash { background: var(--surface-2); }
+  .zone {
+    display: none; margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 12px;
+    letter-spacing: .03em; text-transform: none; color: var(--text-primary);
+    border: 1px solid var(--zc, var(--border)); background: var(--surface-2);
+  }
+  .zone.show { display: inline-block; }
+  .zone::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--zc); margin-right: 6px; vertical-align: 0; }
+  .lapline { color: var(--text-primary); }
+  .laps { overflow-x: auto; }
+  .laps table { border-collapse: collapse; width: 100%; font-size: 14px; white-space: nowrap; }
+  .laps th { text-align: right; color: var(--text-muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; padding: 4px 10px; border-bottom: 1px solid var(--border); }
+  .laps td { text-align: right; padding: 5px 10px; border-bottom: 1px solid var(--grid); }
+  .laps th:first-child, .laps td:first-child { text-align: left; }
+  .laps tr.now td { color: var(--text-secondary); }
   .stats { display: flex; gap: 18px; flex-wrap: wrap; font-size: 14px; color: var(--text-secondary); }
   .stats b { color: var(--text-primary); font-weight: 600; }
 
@@ -142,6 +163,7 @@
       <button data-v="600">10m</button>
       <button data-v="0">All</button>
     </div>
+    <button class="btn lap" id="lap" title="Finish this lap and start the next">Lap</button>
     <button class="btn" id="reset">Reset</button>
     <a class="btn" href="/rides">Rides</a>
   </header>
@@ -154,7 +176,7 @@
       <div class="value mid" id="time">0:00</div>
     </div>
     <div class="tile power">
-      <div class="label">Power</div>
+      <div class="label">Power<span class="zone" id="zone"></span></div>
       <div class="value big" id="power">—<small>W</small></div>
     </div>
     <div class="tile">
@@ -182,7 +204,8 @@
     </div>
   </section>
 
-  <section class="stats" id="stats" title="NP = normalized power: like the average, but weights hard efforts more, so it reflects how hard the ride felt"></section>
+  <section class="stats" id="stats" title="NP = normalized power: like the average, but weights hard efforts more. IF = NP ÷ FTP. TSS = training load: 100 = one hour at FTP."></section>
+  <section class="stats lapline" id="lapline"></section>
 
   <section class="tile chart">
     <div class="legend">
@@ -195,6 +218,8 @@
       <div class="tip" id="tip"></div>
     </div>
   </section>
+
+  <section class="tile laps" id="laps" hidden></section>
 
 <script>
 (() => {
@@ -254,6 +279,11 @@
   const num = (v, unit) => `${v == null ? "—" : Math.round(v)}<small>${unit}</small>`;
   const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
+  // ---------- power zones (share of FTP; same limits as ride.py)
+  const ZONES = [[1, "Recovery", .55], [2, "Endurance", .75], [3, "Tempo", .90], [4, "Threshold", 1.05],
+                 [5, "VO2 max", 1.20], [6, "Anaerobic", 1.50], [7, "Neuromuscular", Infinity]];
+  const zoneOf = (p, ftp) => ftp && p != null ? ZONES.find(z => p <= z[2] * ftp) : null;
+
   // ---------- numbers
   function smoothed() {
     // Average of the last `smoothS` seconds; falls back to the live sample when stopped.
@@ -270,9 +300,13 @@
   function renderNumbers() {
     if (!latest) return;
     const st = latest.stats || {};
+    const ftp = st.ftp;
     $("time").textContent = fmtTime(st.elapsed);
     const s = smoothed();
     $("power").innerHTML = num(s.p, "W");
+    const z = latest.moving ? zoneOf(s.p, ftp) : null;
+    $("zone").classList.toggle("show", !!z);
+    if (z) { $("zone").textContent = `Z${z[0]} ${z[1]}`; $("zone").style.setProperty("--zc", `var(--z${z[0]})`); }
     $("cad").innerHTML = num(s.c, "rpm");
     // Show the heart rate tile once a strap has been seen in this ride.
     if (latest.h != null || st.avg_hr != null) $("tiles").classList.add("has-hr");
@@ -297,10 +331,42 @@
       `<span>Avg L/R <b>${avgBal}</b></span>` +
       `<span>Avg cad <b>${st.avg_c ?? "—"} rpm</b></span>` +
       (st.avg_hr != null ? `<span>Avg HR <b>${st.avg_hr} bpm</b></span><span>Max HR <b>${st.max_hr} bpm</b></span>` : "") +
-      `<span>Work <b>${st.kj ?? "—"} kJ</b></span>`;
+      `<span>Work <b>${st.kj ?? "—"} kJ</b></span>` +
+      (ftp ? `<span>IF <b>${st.if != null ? st.if.toFixed(2) : "—"}</b></span><span>TSS <b>${st.tss ?? "—"}</b></span>` : "");
+    renderLaps(st);
 
     renderStatus();
   }
+
+  // ---------- laps
+  function renderLaps(st) {
+    const lap = st.lap, laps = st.laps || [];
+    // The lap line only once a lap has been pressed; before that it repeats the ride totals.
+    $("lapline").innerHTML = lap && laps.length
+      ? `<span>Lap <b>${lap.n}</b></span><span>Lap time <b>${fmtTime(lap.elapsed)}</b></span>` +
+        `<span>Lap avg <b>${lap.avg_p} W</b></span>` +
+        (lap.avg_hr != null ? `<span>Lap HR <b>${lap.avg_hr} bpm</b></span>` : "")
+      : "";
+    const box = $("laps");
+    box.hidden = !laps.length;
+    if (!laps.length) return;
+    const hasHr = [...laps, lap].some(l => l && l.avg_hr != null);
+    const ftp = st.ftp;
+    const row = (l, now) => `<tr class="${now ? "now" : ""}"><td>${l.n}${now ? " (now)" : ""}</td>` +
+      `<td>${fmtTime(l.elapsed)}</td><td>${l.avg_p} W</td><td>${l.np ?? "—"}${l.np != null ? " W" : ""}</td>` +
+      `<td>${l.max_p} W</td>` + (ftp ? `<td>${l.if != null ? l.if.toFixed(2) : "—"}</td>` : "") +
+      (hasHr ? `<td>${l.avg_hr ?? "—"}${l.avg_hr != null ? " bpm" : ""}</td>` : "") +
+      `<td>${l.avg_c} rpm</td></tr>`;
+    box.innerHTML = `<table><thead><tr><th>Lap</th><th>Time</th><th>Avg</th><th>NP</th><th>Max</th>` +
+      (ftp ? `<th>IF</th>` : "") + (hasHr ? `<th>HR</th>` : "") + `<th>Cadence</th></tr></thead><tbody>` +
+      laps.map(l => row(l, false)).join("") + (lap && lap.elapsed > 0 ? row(lap, true) : "") + `</tbody></table>`;
+  }
+
+  $("lap").onclick = () => {
+    post("/api/lap");
+    const b = $("lap");
+    b.classList.add("flash"); setTimeout(() => b.classList.remove("flash"), 400);
+  };
 
   // ---------- status line and warnings
   const STALE_MS = 5000;     // no sample for this long = the bike computer stopped updating
@@ -372,6 +438,27 @@
     const x = t => PAD.l + (t - t0) / span * pw;
     const y = p => PAD.t + ph - (p / yMax) * ph;
 
+    // power zone bands (faint), with Z labels on the left inside the plot
+    const ftp = latest && latest.stats ? latest.stats.ftp : null;
+    if (ftp) {
+      ctx.save();
+      ctx.font = "11px system-ui, sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+      let lo = 0;
+      for (const [n, , hi] of ZONES) {
+        const top = Math.min(hi * ftp, yMax);
+        if (lo >= yMax) break;
+        const y0 = y(lo), y1 = y(top);
+        ctx.globalAlpha = .09; ctx.fillStyle = css(`--z${n}`);
+        ctx.fillRect(PAD.l, y1, pw, y0 - y1);
+        if (y0 - y1 > 14) {
+          ctx.globalAlpha = .8; ctx.fillStyle = css("--text-muted");
+          ctx.fillText(`Z${n}`, PAD.l + 4, (y0 + y1) / 2);
+        }
+        lo = top;
+      }
+      ctx.restore();
+    }
+
     // grid + y labels
     ctx.font = "12px system-ui, sans-serif";
     ctx.fillStyle = css("--text-muted");
@@ -397,6 +484,20 @@
       tip.style.display = "none";
       return;
     }
+
+    // lap starts: dashed vertical line with the lap number
+    ctx.save();
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = css("--text-muted"); ctx.lineWidth = 1;
+    ctx.fillStyle = css("--text-secondary"); ctx.font = "11px system-ui, sans-serif";
+    ctx.textAlign = "left"; ctx.textBaseline = "top";
+    for (let i = 1; i < data.length; i++) {
+      if (data[i].lap != null && data[i - 1].lap != null && data[i].lap !== data[i - 1].lap) {
+        const xx = Math.round(x(data[i].t)) + .5;
+        ctx.beginPath(); ctx.moveTo(xx, PAD.t); ctx.lineTo(xx, PAD.t + ph); ctx.stroke();
+        ctx.fillText(`Lap ${data[i].lap}`, xx + 4, PAD.t + 2);
+      }
+    }
+    ctx.restore();
 
     // series, drawn back-to-front: left, right, then total on top
     const series = [
@@ -491,7 +592,7 @@
       const m = JSON.parse(ev.data);
       if (m.type === "reset") { history = []; latest = null; $("tiles").classList.remove("has-hr"); render(); return; }
       latest = m;
-      if (m.moving) history.push({ t: m.t, p: m.p, l: m.l, r: m.r, c: m.c, h: m.h });
+      if (m.moving) history.push({ t: m.t, p: m.p, l: m.l, r: m.r, c: m.c, h: m.h, lap: m.lap });
       if (history.length > 7200) history.splice(0, history.length - 7200);
       render();
     };

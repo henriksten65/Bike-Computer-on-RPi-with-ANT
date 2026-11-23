@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### New
+- **Lap button** on the dashboard: current lap and a lap table (time, average, NP, max power,
+  IF, heart rate, cadence), lap lines on the graph, a `lap` column in the ride files, and one
+  lap per lap in the TCX export.
+- **FTP setting** on the Rides page, saved on the Pi.
+- **Power zones** (Z1–Z7) once FTP is set: the current zone on the power tile and zone bands on
+  the graph.
+- **IF and TSS** for the ride, each lap, and the saved rides.
+
 ## 0.5.0 (2026-11-23)
 
 ### New

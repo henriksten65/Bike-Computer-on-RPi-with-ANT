@@ -15,7 +15,9 @@ from ride import Ride
 from ridelog import CsvLogger
 
 
-class ServerTest(unittest.TestCase):
+class ServerBase(unittest.TestCase):
+    """Starts a server on a free port with a temporary rides folder."""
+
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
@@ -26,8 +28,10 @@ class ServerTest(unittest.TestCase):
         with open(os.path.join(cls.dir, "secret.txt"), "w") as f:
             f.write("not for download")
         cls.ride = Ride(logger=CsvLogger(cls.dir))
+        cls.settings = os.path.join(cls.dir, "settings.json")
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0),
-                                         bikecomputer.make_handler(cls.ride, bikecomputer.Hub(), cls.dir))
+                                         bikecomputer.make_handler(cls.ride, bikecomputer.Hub(), cls.dir,
+                                                                   cls.settings))
         cls.server.daemon_threads = True
         cls.port = cls.server.server_address[1]
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
@@ -53,6 +57,9 @@ class ServerTest(unittest.TestCase):
         if origin:
             h["Origin"] = origin
         return self.request("POST", path, body or {}, h)
+
+
+class ServerTest(ServerBase):
 
     def test_pages(self):
         for path in ("/", "/index.html", "/?x=1", "/rides"):
@@ -126,3 +133,48 @@ class ServerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrainingEndpointsTest(ServerBase):
+    """Lap button and FTP setting."""
+
+    def setUp(self):
+        self.ride.reset()
+        self.ride.ftp = None
+
+    def test_lap(self):
+        from ride import Reading
+        self.assertEqual(self.post("/api/lap")[0].status, 200)      # empty lap: ignored
+        self.assertEqual(self.ride.laps, [])
+        self.ride.add(Reading(power=200, cadence=90))
+        self.ride.tick(1.0)
+        self.assertEqual(self.post("/api/lap")[0].status, 200)
+        self.assertEqual(len(self.ride.laps), 1)
+        self.assertEqual(self.post("/api/lap", header=False)[0].status, 403)
+
+    def test_set_and_clear_ftp(self):
+        self.assertEqual(self.post("/api/settings", {"ftp": 250})[0].status, 200)
+        self.assertEqual(self.ride.ftp, 250)
+        with open(self.settings) as f:
+            self.assertEqual(json.load(f)["ftp"], 250)
+        data = json.loads(self.request("GET", "/api/rides")[1])
+        self.assertEqual(data["ftp"], 250)
+        self.assertEqual(self.post("/api/settings", {"ftp": None})[0].status, 200)
+        self.assertIsNone(self.ride.ftp)
+        with open(self.settings) as f:
+            self.assertIsNone(json.load(f)["ftp"])
+
+    def test_bad_ftp(self):
+        for bad in (10, 5000, "250", 250.5, True):
+            self.assertEqual(self.post("/api/settings", {"ftp": bad})[0].status, 400, bad)
+        self.assertEqual(self.post("/api/settings", {})[0].status, 400)
+        self.assertIsNone(self.ride.ftp)
+
+    def test_settings_file_round_trip(self):
+        path = os.path.join(self.dir, "s2.json")
+        self.assertEqual(bikecomputer.load_settings(path), {})
+        bikecomputer.save_settings(path, {"ftp": 230})
+        self.assertEqual(bikecomputer.load_settings(path), {"ftp": 230})
+        with open(path, "w") as f:
+            f.write("{not json")
+        self.assertEqual(bikecomputer.load_settings(path), {})

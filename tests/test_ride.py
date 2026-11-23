@@ -170,3 +170,86 @@ class WallClockTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrainingNumbersTest(unittest.TestCase):
+    def test_zones(self):
+        ftp = 200
+        cases = {0: 1, 110: 1, 111: 2, 150: 2, 151: 3, 180: 3, 181: 4, 210: 4,
+                 211: 5, 240: 5, 241: 6, 300: 6, 301: 7, 1500: 7}
+        for power, z in cases.items():
+            self.assertEqual(ride.zone(power, ftp), z, power)
+        self.assertIsNone(ride.zone(200, None))
+
+    def test_if_and_tss(self):
+        self.assertEqual(ride.intensity_factor(200, 250), 0.8)
+        self.assertEqual(ride.training_stress(3600, 250, 250), 100)     # 1 h at FTP
+        self.assertEqual(ride.training_stress(3600, 200, 250), 64)      # 1 h at IF 0.8
+        self.assertEqual(ride.training_stress(1800, 250, 250), 50)
+        self.assertIsNone(ride.intensity_factor(200, None))
+        self.assertIsNone(ride.training_stress(3600, None, 250))
+
+    def test_live_if_and_tss(self):
+        r = Ride(ftp=250)
+        st = ride_through(r, [250] * 600)["stats"]
+        self.assertEqual((st["np"], st["if"], st["tss"], st["ftp"]), (250, 1.0, 17, 250))   # 10 min at FTP
+
+    def test_no_ftp_no_if(self):
+        st = ride_through(Ride(), [250] * 60)["stats"]
+        self.assertEqual((st["if"], st["tss"], st["ftp"]), (None, None, None))
+
+    def test_ftp_change_applies_to_finished_laps(self):
+        r = Ride(ftp=200)
+        ride_through(r, [200] * 60)
+        r.new_lap()
+        r.ftp = 100
+        st = r.tick(1.0)["stats"]
+        self.assertEqual(st["laps"][0]["if"], 2.0)
+
+
+class LapTest(unittest.TestCase):
+    def test_laps_split_the_ride(self):
+        r = Ride()
+        ride_through(r, [100] * 40)
+        self.assertTrue(r.new_lap())
+        s = ride_through(r, [300] * 50)
+        st = s["stats"]
+        self.assertEqual(s["lap"], 2)
+        self.assertEqual(len(st["laps"]), 1)
+        first, now = st["laps"][0], st["lap"]
+        self.assertEqual((first["n"], first["elapsed"], first["avg_p"], first["np"], first["start_t"]),
+                         (1, 40.0, 100, 100, 0.0))
+        self.assertEqual((now["n"], now["elapsed"], now["avg_p"], now["np"], now["start_t"]),
+                         (2, 50.0, 300, 300, 40.0))
+        self.assertEqual((st["avg_p"], st["elapsed"]), (211, 90.0))          # whole ride: 19000 W·s / 90 s
+
+    def test_lap_number_in_history(self):
+        r = Ride()
+        ride_through(r, [100] * 3)
+        r.new_lap()
+        ride_through(r, [100] * 2)
+        self.assertEqual([h["lap"] for h in r.history], [1, 1, 1, 2, 2])
+
+    def test_empty_lap_is_ignored(self):
+        r = Ride()
+        self.assertFalse(r.new_lap())          # nothing ridden yet
+        ride_through(r, [100] * 5)
+        self.assertTrue(r.new_lap())
+        self.assertFalse(r.new_lap())          # pressed twice
+        self.assertEqual(len(r.laps), 1)
+
+    def test_paused_seconds_dont_count_in_the_lap(self):
+        r = Ride()
+        ride_through(r, [100] * 5)
+        for _ in range(3):
+            r.add(Reading(power=0, cadence=0))
+            r.tick(1.0)
+        self.assertEqual(r.lap.seconds, 5)
+
+    def test_reset_clears_laps(self):
+        r = Ride()
+        ride_through(r, [100] * 5)
+        r.new_lap()
+        r.reset()
+        st = r.snapshot()["stats"]
+        self.assertEqual((st["laps"], st["lap"]["n"]), ([], 1))

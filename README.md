@@ -27,6 +27,10 @@ heart rate strap ──ANT+───────► USB stick ──────
 - **Heart rate** from an ANT+ chest strap or watch (the tile appears once a strap is found)
 - **Ride stats**: average, normalized (NP) and max power, average L/R balance, average cadence,
   average and max heart rate, and work (kJ)
+- **Training numbers** once you enter your FTP: the current **power zone** (Z1–Z7) on the power
+  tile, zone bands on the graph, and **IF** and **TSS** for the ride and each lap
+- **Lap button**: a lap table with time, average, NP, max power, IF, heart rate and cadence per
+  lap, lap lines on the graph, and one lap per lap in the TCX file
 - **One CSV file per ride**, saved in `rides/` (the newest 10 are kept)
 - **Ride list** at `/rides`: past rides with their stats, and downloads as **TCX** (upload to
   Strava, Garmin Connect, intervals.icu, TrainingPeaks, …) or **CSV** (for a spreadsheet)
@@ -109,6 +113,27 @@ To run it by hand instead (stop the service first with `sudo systemctl stop bike
 .venv/bin/python bikecomputer.py --source ant
 ```
 
+### FTP, zones, IF and TSS
+
+Open **Rides** and enter your **FTP** (functional threshold power: the power you can hold for
+about an hour) under **Training**. The FTP is saved on the Pi, in `settings.json`, so it applies
+on every phone or laptop. Then the dashboard shows:
+
+| Number | Meaning |
+|---|---|
+| Zone | Z1 Recovery (up to 55 % of FTP), Z2 Endurance (75 %), Z3 Tempo (90 %), Z4 Threshold (105 %), Z5 VO2 max (120 %), Z6 Anaerobic (150 %), Z7 Neuromuscular (above) |
+| IF | Intensity Factor = NP ÷ FTP. About 0.75 for an endurance ride, 1.0 for an all-out hour |
+| TSS | Training Stress Score = hours × IF² × 100. One hour at FTP = 100 |
+
+IF and TSS need NP, so they appear after 30 seconds of riding. The ride list shows them for
+saved rides too, worked out with the FTP set now.
+
+### Laps
+
+Tap **Lap** to finish the current lap and start the next. Once you have pressed it, the
+dashboard shows the current lap and a table of all laps. Laps are saved in the ride file and
+become separate laps in the TCX file.
+
 When you're done, open **Rides** on the dashboard and tap **Power off**. Wait until the Pi's
 green light stops flashing before you unplug it.
 
@@ -131,7 +156,7 @@ dashboard keeps working.
 
 Each ride is saved as `rides/ride-YYYYMMDD-HHMMSS.csv`, one row per second of moving time:
 
-`time_iso, elapsed_s, power_w, left_w, right_w, cadence_rpm, heart_rate_bpm`
+`time_iso, elapsed_s, power_w, left_w, right_w, cadence_rpm, heart_rate_bpm, lap`
 
 Empty values mean the meter didn't send them (no balance, no strap). A new file starts on
 **Reset** and whenever the program starts. Only the newest 10 are kept, so download the ones
@@ -178,6 +203,7 @@ Pass these to `bikecomputer.py`. For the service, add them to the `ExecStart` li
 | `--log-dir DIR` | Where to save ride CSV files (default: `rides/`) |
 | `--keep-rides N` | Keep only the newest N ride CSV files and delete older ones (default 10, 0 = keep all) |
 | `--no-log` | Don't save CSV files |
+| `--settings FILE` | Where to keep settings changed on the page, such as FTP (default: `settings.json`) |
 | `--version` | Show the version |
 
 ### About the left/right split
@@ -213,7 +239,7 @@ On older Raspberry Pi OS versions the command is `chromium-browser`.
 |---|---|
 | `bikecomputer.py` | Main program: web server, live updates, power off |
 | `sources.py` | Data sources: ANT+ (power and heart rate), Bluetooth LE and the simulator |
-| `ride.py` | Ride state: 1-second samples, moving time, stats and normalized power |
+| `ride.py` | Ride state: 1-second samples, moving time, laps, stats, NP, zones, IF and TSS |
 | `ridelog.py` | Ride CSV files: writing, keeping the newest 10, reading them back for the ride list, and TCX export |
 | `static/index.html` | The dashboard |
 | `static/rides.html` | The ride list, with downloads and the power off button |

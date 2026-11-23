@@ -11,8 +11,8 @@ import ridelog
 from ridelog import CsvLogger, list_rides, summarize
 
 
-def sample(t, p=200, l=100, r=100, c=90, h=None, wall=1795430000.0):
-    return {"t": t, "wall": wall + t, "p": p, "l": l, "r": r, "c": c, "h": h}
+def sample(t, p=200, l=100, r=100, c=90, h=None, lap=1, wall=1795430000.0):
+    return {"t": t, "wall": wall + t, "p": p, "l": l, "r": r, "c": c, "h": h, "lap": lap}
 
 
 class CsvLoggerTest(unittest.TestCase):
@@ -32,8 +32,8 @@ class CsvLoggerTest(unittest.TestCase):
         with open(lg.path, newline="") as f:
             rows = list(csv.reader(f))
         self.assertEqual(rows[0], ridelog.COLUMNS)
-        self.assertEqual(rows[1][1:], ["1", "200", "100", "100", "90", "140"])
-        self.assertEqual(rows[2][-1], "")
+        self.assertEqual(rows[1][1:], ["1", "200", "100", "100", "90", "140", "1"])
+        self.assertEqual(rows[2][-2], "")      # no heart rate
 
     def test_keeps_only_newest_rides_and_leaves_other_files(self):
         for d in range(10, 22):
@@ -120,7 +120,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class TcxTest(unittest.TestCase):
+class TcxBase(unittest.TestCase):
     NS = {"t": "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2",
           "x": "http://www.garmin.com/xmlschemas/ActivityExtension/v2"}
 
@@ -146,6 +146,9 @@ class TcxTest(unittest.TestCase):
             w.writerow(header)
             w.writerows(rows)
         return ET.fromstring(ridelog.to_tcx(path, "0.4.0"))
+
+
+class TcxTest(TcxBase):
 
     def test_trackpoints_and_lap(self):
         doc = self.tcx([["2026-07-01T10:00:00", 1, 200, 100, 100, 90, 140],
@@ -207,3 +210,41 @@ class TcxTest(unittest.TestCase):
     def test_empty_ride_cannot_be_exported(self):
         with self.assertRaises(ValueError):
             self.tcx([])
+
+
+class LapsInFilesTest(TcxBase):
+    def rows(self):
+        # lap 1: 2 s at 100 W, lap 2: 3 s at 300 W
+        return ([[f"2026-07-01T10:00:0{i}", i + 1, 100, 50, 50, 80, 120, 1] for i in range(2)] +
+                [[f"2026-07-01T10:00:0{i}", i + 1, 300, 150, 150, 95, 150, 2] for i in range(2, 5)])
+
+    def test_tcx_has_one_lap_per_lap(self):
+        doc = self.tcx(self.rows())
+        laps = doc.findall(".//t:Lap", self.NS)
+        self.assertEqual(len(laps), 2)
+        self.assertEqual(laps[0].get("StartTime"), "2026-07-01T08:00:00Z")
+        self.assertEqual(laps[1].get("StartTime"), "2026-07-01T08:00:02Z")
+        self.assertEqual([l.find("t:TotalTimeSeconds", self.NS).text for l in laps], ["2", "3"])
+        self.assertEqual([l.find(".//x:AvgWatts", self.NS).text for l in laps], ["100", "300"])
+        self.assertEqual([len(l.findall(".//t:Trackpoint", self.NS)) for l in laps], [2, 3])
+        self.assertEqual(laps[1].find("t:AverageHeartRateBpm/t:Value", self.NS).text, "150")
+
+    def test_summary_counts_laps(self):
+        path = os.path.join(self.tmp.name, "ride-20260701-100000.csv")
+        with open(path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(ridelog.COLUMNS)
+            w.writerows(self.rows())
+        self.assertEqual(summarize(path)["laps"], 2)
+
+    def test_ride_list_if_and_tss_use_the_given_ftp(self):
+        path = os.path.join(self.tmp.name, "ride-20260701-100000.csv")
+        with open(path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(ridelog.COLUMNS)
+            w.writerows([[f"2026-07-01T10:{i // 60:02d}:{i % 60:02d}", i + 1, 200, "", "", 90, "", 1]
+                         for i in range(1800)])
+        ride = list_rides(self.tmp.name, ftp=250)[0]
+        self.assertEqual((ride["np"], ride["if"], ride["tss"]), (200, 0.8, 32))   # 30 min at IF 0.8
+        ride = list_rides(self.tmp.name)[0]
+        self.assertEqual((ride["if"], ride["tss"]), (None, None))
