@@ -95,6 +95,10 @@
   .chart { flex: 1; min-height: 220px; position: relative; padding: 10px 6px 6px 6px; display: flex; flex-direction: column; }
   .legend { display: flex; gap: 16px; font-size: 13px; color: var(--text-secondary); padding: 0 8px 6px; flex-wrap: wrap; }
   .legend .key { width: 14px; height: 3px; border-radius: 2px; vertical-align: 3px; }
+  .legend button { font: inherit; color: inherit; background: none; border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; cursor: pointer; }
+  .legend button[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
+  .legend button[aria-pressed="false"] .key { background: var(--text-muted) !important; }
+  .legend > span { padding: 3px 0; }
   .plot { position: relative; flex: 1; min-height: 0; }
   canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
   .tip {
@@ -163,8 +167,8 @@
   <section class="tile chart">
     <div class="legend">
       <span><span class="key" style="background:var(--series-total)"></span>Total</span>
-      <span><span class="key" style="background:var(--series-left)"></span>Left</span>
-      <span><span class="key" style="background:var(--series-right)"></span>Right</span>
+      <button type="button" id="showL" title="Show or hide the left pedal line"><span class="key" style="background:var(--series-left)"></span>Left</button>
+      <button type="button" id="showR" title="Show or hide the right pedal line"><span class="key" style="background:var(--series-right)"></span>Right</button>
     </div>
     <div class="plot" id="plot">
       <canvas id="cv" aria-label="Power over time: total, left and right pedal"></canvas>
@@ -180,12 +184,23 @@
   let windowS = 300;
   let smoothS = 3;
   let hoverX = null;
+  let showL = true, showR = true;   // left/right pedal lines on the graph
 
   // ---------- persisted preferences (best effort)
   try {
     const w = localStorage.getItem("bc.win"); if (w !== null) windowS = +w;
     const s = localStorage.getItem("bc.smooth"); if (s !== null) smoothS = +s;
+    showL = localStorage.getItem("bc.showL") !== "0";
+    showR = localStorage.getItem("bc.showR") !== "0";
   } catch (e) {}
+  function setupToggle(id, key, get, set) {
+    const b = $(id);
+    const sync = () => b.setAttribute("aria-pressed", String(get()));
+    b.onclick = () => { set(!get()); sync(); try { localStorage.setItem(key, get() ? "1" : "0"); } catch (e) {} render(); };
+    sync();
+  }
+  setupToggle("showL", "bc.showL", () => showL, v => showL = v);
+  setupToggle("showR", "bc.showR", () => showR, v => showR = v);
   function setupSeg(id, get, set) {
     const btns = [...$(id).querySelectorAll("button")];
     const sync = () => btns.forEach(b => b.setAttribute("aria-pressed", String(+b.dataset.v === get())));
@@ -324,10 +339,10 @@
 
     // series, drawn back-to-front: left, right, then total on top
     const series = [
-      { k: "l", color: css("--series-left"),  name: "Left" },
-      { k: "r", color: css("--series-right"), name: "Right" },
-      { k: "p", color: css("--series-total"), name: "Total" },
-    ];
+      { k: "l", color: css("--series-left"),  name: "Left",  on: showL },
+      { k: "r", color: css("--series-right"), name: "Right", on: showR },
+      { k: "p", color: css("--series-total"), name: "Total", on: true },
+    ].filter(s => s.on);
     ctx.save();
     ctx.beginPath(); ctx.rect(PAD.l, PAD.t - 2, pw, ph + 4); ctx.clip();
     ctx.lineJoin = "round"; ctx.lineCap = "round";
