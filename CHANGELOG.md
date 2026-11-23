@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-11-23)
 
 ### New
 - **TCX export**: a **TCX** button for each ride on the Rides page, for uploading to Strava,
