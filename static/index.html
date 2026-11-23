@@ -74,9 +74,12 @@
   }
   .seg button + button { border-left: 1px solid var(--border); }
   .seg button[aria-pressed="true"] { background: var(--surface-2); color: var(--text-primary); font-weight: 600; }
-  .btn { border: 1px solid var(--border); border-radius: 8px; }
+  .btn { border: 1px solid var(--border); border-radius: 8px; text-decoration: none; display: inline-flex; align-items: center; }
 
   .tiles { display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 10px; }
+  .tiles.has-hr { grid-template-columns: 1fr 1.4fr 1fr 1fr; }
+  .tile.hr { display: none; }
+  .tiles.has-hr .tile.hr { display: block; }
   .tile {
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
     padding: 10px 14px; min-width: 0;
@@ -121,6 +124,8 @@
   @media (max-width: 640px) {
     .tiles { grid-template-columns: 1fr 1fr; }
     .tiles .power { grid-column: 1 / -1; order: -1; }
+    .tiles.has-hr { grid-template-columns: 1fr 1fr 1fr; }
+    .tiles.has-hr .mid { font-size: clamp(24px, 7.5vw, 40px); }
   }
 </style>
 </head>
@@ -138,11 +143,12 @@
       <button data-v="0">All</button>
     </div>
     <button class="btn" id="reset">Reset</button>
+    <a class="btn" href="/rides">Rides</a>
   </header>
 
   <div class="alert" id="alert" role="alert"></div>
 
-  <section class="tiles">
+  <section class="tiles" id="tiles">
     <div class="tile">
       <div class="label">Time</div>
       <div class="value mid" id="time">0:00</div>
@@ -154,6 +160,10 @@
     <div class="tile">
       <div class="label">Cadence</div>
       <div class="value mid" id="cad">—<small>rpm</small></div>
+    </div>
+    <div class="tile hr">
+      <div class="label">Heart rate</div>
+      <div class="value mid" id="hr">—<small>bpm</small></div>
     </div>
   </section>
 
@@ -254,7 +264,7 @@
       const v = tail.map(s => s[k]).filter(x => x != null);
       return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
     };
-    return { p: avg("p"), l: avg("l"), r: avg("r"), c: avg("c") };
+    return { p: avg("p"), l: avg("l"), r: avg("r"), c: avg("c"), h: latest.h };
   }
 
   function renderNumbers() {
@@ -264,6 +274,9 @@
     const s = smoothed();
     $("power").innerHTML = num(s.p, "W");
     $("cad").innerHTML = num(s.c, "rpm");
+    // Show the heart rate tile once a strap has been seen in this ride.
+    if (latest.h != null || st.avg_hr != null) $("tiles").classList.add("has-hr");
+    $("hr").innerHTML = num(latest.h, "bpm");
     $("left").innerHTML = num(s.l, "W");
     $("right").innerHTML = num(s.r, "W");
     const tot = (s.l || 0) + (s.r || 0);
@@ -283,6 +296,7 @@
       `<span>Max <b>${st.max_p ?? "—"} W</b></span>` +
       `<span>Avg L/R <b>${avgBal}</b></span>` +
       `<span>Avg cad <b>${st.avg_c ?? "—"} rpm</b></span>` +
+      (st.avg_hr != null ? `<span>Avg HR <b>${st.avg_hr} bpm</b></span><span>Max HR <b>${st.max_hr} bpm</b></span>` : "") +
       `<span>Work <b>${st.kj ?? "—"} kJ</b></span>`;
 
     renderStatus();
@@ -442,7 +456,8 @@
         row("Total", `${best.p} W`) +
         row("Left", best.l == null ? "—" : `${best.l} W`) +
         row("Right", best.r == null ? "—" : `${best.r} W`) +
-        row("Cadence", best.c == null ? "—" : `${best.c} rpm`);
+        row("Cadence", best.c == null ? "—" : `${best.c} rpm`) +
+        (best.h != null ? row("Heart rate", `${best.h} bpm`) : "");
       tip.style.display = "block";
       const tw = tip.offsetWidth;
       tip.style.left = (xx + 12 + tw > W ? xx - 12 - tw : xx + 12) + "px";
@@ -474,9 +489,9 @@
     es.onmessage = ev => {
       lastMsgAt = Date.now();
       const m = JSON.parse(ev.data);
-      if (m.type === "reset") { history = []; latest = null; render(); return; }
+      if (m.type === "reset") { history = []; latest = null; $("tiles").classList.remove("has-hr"); render(); return; }
       latest = m;
-      if (m.moving) history.push({ t: m.t, p: m.p, l: m.l, r: m.r, c: m.c });
+      if (m.moving) history.push({ t: m.t, p: m.p, l: m.l, r: m.r, c: m.c, h: m.h });
       if (history.length > 7200) history.splice(0, history.length - 7200);
       render();
     };

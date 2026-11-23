@@ -12,6 +12,8 @@ STALE_AFTER_S = 3.0
 HISTORY_LEN = 2 * 60 * 60
 # Normalized power uses a rolling average over this many seconds of riding.
 NP_WINDOW_S = 30
+# Heart rate older than this is treated as "no heart rate".
+HR_STALE_AFTER_S = 5.0
 # Correct the clock when the browser's time differs from the Pi's by more than this.
 CLOCK_TOLERANCE_S = 60
 
@@ -61,6 +63,22 @@ class WallClock:
 clock = WallClock()
 
 
+def normalized_power(powers):
+    """Normalized power of a list of 1 s power values (moving seconds only).
+
+    4th-power mean of the 30 s rolling average; None for less than 30 s.
+    Same calculation as the live value in Ride, used for saved rides.
+    """
+    if len(powers) < NP_WINDOW_S:
+        return None
+    window_sum = sum(powers[:NP_WINDOW_S])
+    sum4 = (window_sum / NP_WINDOW_S) ** 4
+    for i in range(NP_WINDOW_S, len(powers)):
+        window_sum += powers[i] - powers[i - NP_WINDOW_S]
+        sum4 += (window_sum / NP_WINDOW_S) ** 4
+    return round((sum4 / (len(powers) - NP_WINDOW_S + 1)) ** 0.25)
+
+
 @dataclass
 class Reading:
     """One update from a power meter, already decoded by a source."""
@@ -98,11 +116,20 @@ class Ride:
             self._np_sum4 = 0.0                        # sum of (30 s average) ** 4
             self._np_n = 0
             self.started_wall = None
+            self._hr = None                 # (bpm, monotonic time) of the last heart rate
+            self.sum_hr = 0.0
+            self.n_hr = 0
+            self.max_hr = 0
         if self.logger:
             self.logger.new_file()
 
     def set_source_status(self, level: str, text: str):
         self.source_status = {"level": level, "text": text}
+
+    def add_heart_rate(self, bpm: int, ts: float = None):
+        """Heart rate from a strap; kept separately from the power meter's readings."""
+        with self._lock:
+            self._hr = (bpm, time.monotonic() if ts is None else ts)
 
     def add(self, r: Reading):
         with self._lock:
@@ -131,11 +158,14 @@ class Ride:
                 power = sum(r.power for r in bucket) / len(bucket)
                 cads = [r.cadence for r in bucket if r.cadence is not None]
                 cadence = sum(cads) / len(cads) if cads else None
-                splits = [self._split(r) for r in bucket]
-                splits = [s for s in splits if s[0] is not None]
-                if splits:
-                    left = sum(s[0] for s in splits) / len(splits)
-                    right = sum(s[1] for s in splits) / len(splits)
+                # Left/right: power-weighted left share from the readings that carry
+                # a balance, applied to this second's total so that L + R = total
+                # even when some readings in the second have no balance.
+                splits = [(self._split(r)[0], r.power) for r in bucket if r.balance_pct is not None]
+                balanced_power = sum(p for _, p in splits)
+                if balanced_power > 0:
+                    left = power * sum(l for l, _ in splits) / balanced_power
+                    right = power - left
                 else:
                     left = right = None
             elif connected:
@@ -146,6 +176,8 @@ class Ride:
             else:
                 power, left, right = 0, None, None
                 cadence = 0 if last is not None else None
+
+            hr = self._hr[0] if self._hr and now - self._hr[1] < HR_STALE_AFTER_S else None
 
             moving = connected and (power > 0 or (cadence or 0) > 0)
             if moving:
@@ -159,6 +191,10 @@ class Ride:
                 self.sum_right += right or 0
                 self.max_power = max(self.max_power, power)
                 self.energy_j += power * dt
+                if hr is not None:
+                    self.sum_hr += hr
+                    self.n_hr += 1
+                    self.max_hr = max(self.max_hr, hr)
                 # Normalized power: 4th-power mean of the 30 s rolling average,
                 # counted once the first full 30 s window is available.
                 self._np_window.append(power)
@@ -173,6 +209,7 @@ class Ride:
                 "l": None if left is None else round(left),
                 "r": None if right is None else round(right),
                 "c": None if cadence is None else round(cadence),
+                "h": hr,
                 "moving": moving,
             }
             # Only record graph points while moving, so pauses don't flatten the graph.
@@ -198,6 +235,8 @@ class Ride:
             "avg_c": round(self.sum_cadence / n),
             "max_p": round(self.max_power),
             "np": round((self._np_sum4 / self._np_n) ** 0.25) if self._np_n else None,
+            "avg_hr": round(self.sum_hr / self.n_hr) if self.n_hr else None,
+            "max_hr": self.max_hr or None,
             "kj": round(self.energy_j / 1000, 1),
             "elapsed": round(self.elapsed, 1),
         }

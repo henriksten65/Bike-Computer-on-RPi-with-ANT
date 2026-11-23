@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111110">
+<title>Rides · Bike Computer</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg:            #111110;
+    --surface-1:     #1a1a19;
+    --surface-2:     #242422;
+    --border:        #34332f;
+    --text-primary:  #f0efec;
+    --text-secondary:#c3c2b7;
+    --text-muted:    #8d8c84;
+    --accent:        #199e70;
+    --bad:           #e5484d;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      color-scheme: light;
+      --bg:            #f3f3f1;
+      --surface-1:     #fcfcfb;
+      --surface-2:     #efeeeb;
+      --border:        #dcdbd6;
+      --text-primary:  #0b0b0b;
+      --text-secondary:#52514e;
+      --text-muted:    #75746f;
+      --accent:        #138a60;
+      --bad:           #c62a2f;
+    }
+  }
+  :root[data-theme="dark"] { color-scheme: dark; }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-variant-numeric: tabular-nums;
+    padding: 12px 16px calc(24px + env(safe-area-inset-bottom));
+    max-width: 900px; margin: 0 auto;
+  }
+  header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  h1 { font-size: 22px; margin: 0; margin-right: auto; }
+  h2 { font-size: 15px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; margin: 26px 0 10px; font-weight: 600; }
+  .btn {
+    background: var(--surface-1); color: var(--text-secondary); border: 1px solid var(--border);
+    border-radius: 8px; font: inherit; font-size: 14px; padding: 8px 12px; min-height: 36px;
+    cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .btn:hover { color: var(--text-primary); }
+  .btn.danger { border-color: var(--bad); color: var(--text-primary); }
+  .btn:disabled { opacity: .5; cursor: default; }
+
+  .ride {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 10px;
+  }
+  .ride-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+  .ride-head .when { font-weight: 600; font-size: 16px; margin-right: auto; }
+  .badge { font-size: 12px; border: 1px solid var(--accent); color: var(--accent); border-radius: 999px; padding: 1px 8px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px 14px; }
+  .stat .k { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
+  .stat .v { font-size: 18px; font-weight: 600; }
+  .stat .v small { font-size: 12px; font-weight: 500; color: var(--text-secondary); margin-left: 2px; }
+  .empty, .note { color: var(--text-secondary); font-size: 14px; }
+  .power { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .msg { font-size: 14px; color: var(--text-secondary); margin-top: 10px; min-height: 1.2em; }
+  .msg.bad { color: var(--bad); }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Rides</h1>
+    <a class="btn" href="/">Dashboard</a>
+  </header>
+
+  <div id="list"><p class="empty">Loading…</p></div>
+  <p class="note">Only the newest rides are kept (10 by default). Download the ones you want to keep.</p>
+
+  <h2>Raspberry Pi</h2>
+  <div class="power">
+    <button class="btn danger" id="poweroff">Power off</button>
+    <button class="btn" id="reboot">Restart</button>
+  </div>
+  <div class="msg" id="msg" role="status"></div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const esc = v => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const fmtDur = s => {
+    s = Math.round(s || 0);
+    const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, ss = String(s % 60).padStart(2, "0");
+    return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+  };
+  const fmtWhen = (iso, name) => {
+    // time_iso has no time zone: it is the Pi's local time, shown as is.
+    const d = iso ? new Date(iso) : null;
+    if (!d || isNaN(d)) return name;
+    return d.toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  };
+  const stat = (k, v, unit) => `<div class="stat"><div class="k">${k}</div><div class="v">${v == null ? "—" : esc(v)}${v == null || !unit ? "" : `<small>${unit}</small>`}</div></div>`;
+
+  async function load() {
+    try {
+      const r = await fetch("/api/rides");
+      const { rides } = await r.json();
+      if (!rides.length) { $("list").innerHTML = `<p class="empty">No rides saved yet.</p>`; return; }
+      $("list").innerHTML = rides.map(x => `
+        <article class="ride">
+          <div class="ride-head">
+            <span class="when">${esc(fmtWhen(x.start, x.name))}</span>
+            ${x.in_progress ? `<span class="badge">In progress</span>` : ""}
+            <a class="btn" href="/rides/${encodeURIComponent(x.name)}" download>Download CSV</a>
+          </div>
+          <div class="grid">
+            ${stat("Moving time", fmtDur(x.moving_s))}
+            ${stat("Avg power", x.avg_p, "W")}
+            ${stat("NP", x.np, "W")}
+            ${stat("Max power", x.max_p, "W")}
+            ${stat("Avg L/R", x.balance_l == null ? null : `${x.balance_l}/${100 - x.balance_l}`)}
+            ${stat("Avg cadence", x.avg_c, "rpm")}
+            ${x.avg_hr != null ? stat("Avg HR", x.avg_hr, "bpm") + stat("Max HR", x.max_hr, "bpm") : ""}
+            ${stat("Work", x.kj, "kJ")}
+          </div>
+        </article>`).join("");
+    } catch (e) {
+      $("list").innerHTML = `<p class="empty">Could not load the rides. Is the bike computer running?</p>`;
+    }
+  }
+
+  async function power(action, question, doneText) {
+    if (!confirm(question)) return;
+    const msg = $("msg");
+    msg.className = "msg"; msg.textContent = "Sending…";
+    $("poweroff").disabled = $("reboot").disabled = true;
+    try {
+      const r = await fetch("/api/power", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Bike-Computer": "1" },
+        body: JSON.stringify({ action }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `Error ${r.status}`);
+      msg.textContent = doneText;
+    } catch (e) {
+      msg.className = "msg bad"; msg.textContent = e.message;
+      $("poweroff").disabled = $("reboot").disabled = false;
+    }
+  }
+  $("poweroff").onclick = () => power("poweroff",
+    "Power off the Raspberry Pi? The ride stops recording.",
+    "Shutting down. Wait until the Pi's green light stops flashing (about 20 s) before you unplug it.");
+  $("reboot").onclick = () => power("reboot",
+    "Restart the Raspberry Pi? The ride stops recording.",
+    "Restarting. The dashboard is back in about a minute.");
+
+  load();
+  setInterval(load, 30000);
+})();
+</script>
+</body>
+</html>

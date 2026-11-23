@@ -1,12 +1,14 @@
+# Template: deploy/install.sh fills in @USER@ and @DIR@ and installs it as
+# /etc/systemd/system/bikecomputer.service.
 [Unit]
 Description=Bike computer (power meter dashboard)
 After=network-online.target bluetooth.target
 Wants=network-online.target
 
 [Service]
-User=henriks
-WorkingDirectory=/home/henriks/dev/Claude/Bike computer
-ExecStart="/home/henriks/dev/Claude/Bike computer/.venv/bin/python" bikecomputer.py --source ant
+User=@USER@
+WorkingDirectory=@DIR@
+ExecStart="@DIR@/.venv/bin/python" bikecomputer.py --source ant
 Restart=always
 RestartSec=3
 

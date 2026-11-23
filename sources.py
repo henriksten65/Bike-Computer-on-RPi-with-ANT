@@ -22,6 +22,8 @@ ANTPLUS_NETWORK_KEY = [0xB9, 0xA5, 0x21, 0xFB, 0xBD, 0x72, 0xC3, 0x45]
 ANT_DEVICE_TYPE_POWER = 11
 ANT_POWER_PERIOD = 8182      # 4.00 Hz
 ANT_RF_FREQ = 57             # 2457 MHz
+ANT_DEVICE_TYPE_HR = 120
+ANT_HR_PERIOD = 8070         # 4.06 Hz
 ANT_USB_VENDOR = 0x0FCF      # Dynastream; used by nearly all ANT+ USB sticks
 
 
@@ -61,9 +63,13 @@ class AntSource:
         byte 6-7 instantaneous power (uint16 LE), W
     """
 
-    def __init__(self, ride, device_id=0):
+    def __init__(self, ride, device_id=0, heart_rate=True, hr_device_id=0):
         self.ride = ride
         self.device_id = device_id   # 0 = pair with the first power meter found
+        self.heart_rate = heart_rate        # also listen for an ANT+ heart rate strap
+        self.hr_device_id = hr_device_id    # 0 = first strap found
+        self._hr_found = False
+        self._stopping = False
         self._last_event = None
         self._last_event_change = 0.0
         self.node = None
@@ -72,13 +78,27 @@ class AntSource:
         threading.Thread(target=self._run, name="ant", daemon=True).start()
         threading.Thread(target=self._watch_stick, name="ant-watch", daemon=True).start()
 
+    def stop(self):
+        """Close the ANT+ stick before the program exits.
+
+        Exiting with the openant threads still using the stick crashes Python
+        (segmentation fault in libusb).
+        """
+        self._stopping = True
+        node, self.node = self.node, None
+        if node is not None:
+            try:
+                node.stop()
+            except Exception as e:
+                log.warning("Error closing the ANT+ stick: %s", e)
+
     def _watch_stick(self):
         """Restart ANT+ when the stick is unplugged.
 
         openant only logs USB errors and keeps waiting, so on its own it never
         notices the stick is gone and never reconnects when it's plugged back in.
         """
-        while True:
+        while not self._stopping:
             time.sleep(2)
             node = self.node
             if node is not None and _ant_stick_present() is False:
@@ -94,7 +114,7 @@ class AntSource:
         from openant.easy.node import Node
         from openant.easy.channel import Channel
 
-        while True:
+        while not self._stopping:
             try:
                 self.node = None
                 self.node = Node()
@@ -110,11 +130,23 @@ class AntSource:
                 ch.open()
                 log.info("ANT+ channel open, searching for power meter (device id %s)",
                          self.device_id or "any")
+                if self.heart_rate:
+                    hr = self.node.new_channel(Channel.Type.BIDIRECTIONAL_RECEIVE)
+                    hr.on_broadcast_data = self._on_hr_data
+                    hr.set_period(ANT_HR_PERIOD)
+                    hr.set_search_timeout(255)
+                    hr.set_rf_freq(ANT_RF_FREQ)
+                    hr.set_id(self.hr_device_id, ANT_DEVICE_TYPE_HR, 0)
+                    hr.open()
+                    self._hr_found = False
+                    log.info("ANT+ heart rate channel open (device id %s)", self.hr_device_id or "any")
                 self._last_event = None
                 self.ride.set_source_status("searching", "Searching for pedals (ANT+)… Start pedalling to wake them.")
                 self.node.start()              # blocks until stopped / error
                 time.sleep(1)                  # stopped by _watch_stick: retry soon
             except Exception as e:  # stick missing, permissions, ...
+                if self._stopping:
+                    break
                 log.error("ANT+ error: %s: %s; retrying in 5 s", type(e).__name__, e)
                 self.ride.set_source_status("error", _ant_error_text(e))
                 try:
@@ -122,6 +154,16 @@ class AntSource:
                 except Exception:
                     pass
                 time.sleep(5)
+
+    def _on_hr_data(self, data):
+        """ANT+ heart rate: every data page carries the computed heart rate in byte 7."""
+        data = bytes(data)
+        if len(data) < 8 or data[7] == 0:
+            return
+        if not self._hr_found:
+            log.info("ANT+ heart rate strap found")
+            self._hr_found = True
+        self.ride.add_heart_rate(data[7])
 
     def _on_data(self, data):
         data = bytes(data)
@@ -262,6 +304,7 @@ class SimSource:
 
     def __init__(self, ride):
         self.ride = ride
+        self._hr = 100.0
 
     def start(self):
         self.ride.set_source_status("searching", "Simulator")
@@ -281,4 +324,8 @@ class SimSource:
                 right = 50 + 3 * math.sin(t / 23) + random.gauss(0, 1)
                 self.ride.add(Reading(power=power, cadence=cadence,
                                       balance_pct=round(right), balance_side="right"))
+            # Heart rate follows the effort slowly.
+            target = 95 + 0.25 * (260 if int(t // 60) % 2 and t % 300 <= 290 else 160)
+            self._hr += (target - self._hr) * 0.01
+            self.ride.add_heart_rate(round(self._hr + random.gauss(0, 0.5)))
             time.sleep(0.25)

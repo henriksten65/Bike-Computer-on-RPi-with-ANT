@@ -9,101 +9,25 @@ Then open http://<pi-address>:8080 on a phone/tablet/laptop on the same network.
 """
 
 import argparse
-import csv
 import json
 import logging
 import os
 import queue
+import signal
+import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 from ride import Ride, clock
+from ridelog import CsvLogger
+import ridelog
 import sources
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 log = logging.getLogger("bikecomputer")
-
-
-class CsvLogger:
-    """Writes one CSV per ride into rides/ (a new file on every reset).
-
-    A failed write (disk full, no permission, ...) never stops the ride: it is
-    logged once, shown on the page via `error`, and retried with the next sample.
-    """
-
-    def __init__(self, directory, keep=10):
-        self.dir = directory
-        self.keep = keep   # how many ride files to keep (0 = keep all)
-        self.f = None
-        self.w = None
-        self.path = None
-        self.error = None          # message for the page while saving fails
-        self._opened_mono = None   # time.monotonic() when the file was opened
-
-    def _prune(self):
-        """Delete the oldest ride files so that only the newest `keep` remain."""
-        if self.keep <= 0:
-            return
-        rides = sorted(n for n in os.listdir(self.dir)
-                       if n.startswith("ride-") and n.endswith(".csv"))
-        for name in rides[:-self.keep]:
-            try:
-                os.remove(os.path.join(self.dir, name))
-                log.info("Deleted old ride file %s", name)
-            except OSError as e:
-                log.warning("Could not delete %s: %s", name, e)
-
-    def _name(self, wall):
-        return os.path.join(self.dir, datetime.fromtimestamp(wall).strftime("ride-%Y%m%d-%H%M%S.csv"))
-
-    def new_file(self):
-        if self.f:
-            try:
-                self.f.close()
-            except OSError:
-                pass
-            self.f = None
-
-    def write(self, s):
-        try:
-            if self.f is None:
-                os.makedirs(self.dir, exist_ok=True)
-                self.path = self._name(clock.now())
-                self.f = open(self.path, "w", newline="")
-                self._opened_mono = time.monotonic()
-                self.w = csv.writer(self.f)
-                self.w.writerow(["time_iso", "elapsed_s", "power_w", "left_w", "right_w", "cadence_rpm"])
-                log.info("Logging ride to %s", self.path)
-                self._prune()
-            self.w.writerow([datetime.fromtimestamp(s["wall"]).isoformat(timespec="seconds"),
-                             s["t"], s["p"], s["l"], s["r"], s["c"]])
-            self.f.flush()
-            if self.error:
-                log.info("Saving the ride works again")
-                self.error = None
-        except OSError as e:
-            if not self.error:
-                log.error("Could not save the ride to %s: %s", self.path or self.dir, e)
-            self.error = f"Can't save the ride: {e.strerror or e}"
-            self.new_file()   # start over with a fresh file next time
-
-    def clock_corrected(self):
-        """Rename the open ride file so its name uses the corrected time."""
-        if self.f is None:
-            return
-        new = self._name(clock.now() - (time.monotonic() - self._opened_mono))
-        if new != self.path:
-            try:
-                os.rename(self.path, new)
-                log.info("Renamed %s to %s after the clock was corrected",
-                         os.path.basename(self.path), os.path.basename(new))
-                self.path = new
-            except OSError as e:
-                log.warning("Could not rename %s: %s", self.path, e)
 
 
 class Hub:
@@ -133,7 +57,30 @@ class Hub:
                     pass
 
 
-def make_handler(ride, hub):
+# Power off / restart the Pi. Allowed by the sudoers rule that deploy/install.sh adds.
+POWER_COMMANDS = {
+    "poweroff": ["sudo", "-n", "/usr/bin/systemctl", "poweroff"],
+    "reboot": ["sudo", "-n", "/usr/bin/systemctl", "reboot"],
+}
+
+
+def power_action(action, ride):
+    """Run a power command. Returns (ok, message)."""
+    if ride.logger:
+        ride.logger.new_file()     # close the ride file cleanly first
+    try:
+        r = subprocess.run(POWER_COMMANDS[action], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, str(e)
+    if r.returncode != 0:
+        log.error("%s failed: %s", action, r.stderr.strip())
+        return False, ("Not allowed to power off the Pi. Run deploy/install.sh once to allow it."
+                       if "password" in r.stderr else r.stderr.strip() or f"exit code {r.returncode}")
+    log.info("%s requested from the dashboard", action)
+    return True, ""
+
+
+def make_handler(ride, hub, log_dir):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             pass
@@ -146,11 +93,35 @@ def make_handler(ride, hub):
             self.end_headers()
             self.wfile.write(body)
 
+        def _page(self, name):
+            with open(os.path.join(HERE, "static", name), "rb") as f:
+                self._send(200, f.read(), "text/html; charset=utf-8")
+
         def do_GET(self):
             path = urlsplit(self.path).path
             if path in ("/", "/index.html"):
-                with open(os.path.join(HERE, "static", "index.html"), "rb") as f:
-                    self._send(200, f.read(), "text/html; charset=utf-8")
+                self._page("index.html")
+            elif path in ("/rides", "/rides/"):
+                self._page("rides.html")
+            elif path == "/api/rides":
+                current = ride.logger.path if ride.logger and ride.logger.f else None
+                rides = ridelog.list_rides(log_dir, current=current)
+                self._send(200, json.dumps({"rides": rides}).encode(), "application/json")
+            elif path.startswith("/rides/") and ridelog.NAME_RE.match(path[len("/rides/"):]):
+                name = path[len("/rides/"):]
+                try:
+                    with open(os.path.join(log_dir, name), "rb") as f:
+                        body = f.read()
+                except FileNotFoundError:
+                    self._send(404, b"not found", "text/plain")
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
             elif path == "/api/history":
                 self._send(200, json.dumps(ride.snapshot()).encode(), "application/json")
             elif path == "/events":
@@ -199,7 +170,7 @@ def make_handler(ride, hub):
 
         def do_POST(self):
             path = urlsplit(self.path).path
-            if path not in ("/api/reset", "/api/clock"):
+            if path not in ("/api/reset", "/api/clock", "/api/power"):
                 self._send(404, b"not found", "text/plain")
                 return
             if not self._post_allowed():
@@ -208,6 +179,15 @@ def make_handler(ride, hub):
             if path == "/api/reset":
                 ride.reset()
                 hub.publish({"type": "reset"})
+            elif path == "/api/power":
+                action = self._json_body().get("action")
+                if action not in POWER_COMMANDS:
+                    self._send(400, b"bad request", "text/plain")
+                    return
+                ok, msg = power_action(action, ride)
+                self._send(200 if ok else 500, json.dumps({"error": msg} if not ok else {}).encode(),
+                           "application/json")
+                return
             else:
                 t = self._json_body().get("now")
                 if not isinstance(t, (int, float)) or isinstance(t, bool):
@@ -243,6 +223,10 @@ def main():
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--ant-device-id", type=int, default=0,
                     help="ANT+ device number to pair with (0 = first one found)")
+    ap.add_argument("--ant-hr-device-id", type=int, default=0,
+                    help="ANT+ heart rate strap device number (0 = first one found)")
+    ap.add_argument("--no-heart-rate", action="store_true",
+                    help="don't listen for an ANT+ heart rate strap")
     ap.add_argument("--ble-address", help="BLE MAC address of the pedals (default: scan)")
     ap.add_argument("--ble-name", help="only connect to BLE devices whose name contains this")
     ap.add_argument("--unknown-balance-side", choices=["left", "right"], default=None,
@@ -273,7 +257,8 @@ def main():
     hub = Hub()
 
     if args.source == "ant":
-        src = sources.AntSource(ride, device_id=args.ant_device_id)
+        src = sources.AntSource(ride, device_id=args.ant_device_id,
+                                heart_rate=not args.no_heart_rate, hr_device_id=args.ant_hr_device_id)
     elif args.source == "ble":
         src = sources.BleSource(ride, address=args.ble_address, name_filter=args.ble_name)
     else:
@@ -282,13 +267,24 @@ def main():
 
     threading.Thread(target=ticker, args=(ride, hub), name="ticker", daemon=True).start()
 
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), make_handler(ride, hub))
+    server = ThreadingHTTPServer(("0.0.0.0", args.port), make_handler(ride, hub, args.log_dir))
     server.daemon_threads = True
     log.info("Dashboard on http://0.0.0.0:%d  (source: %s)", args.port, args.source)
+
+    # systemd stops the service with SIGTERM: shut down the same way as Ctrl+C.
+    def on_term(*_):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, on_term)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        log.info("Shutting down")
+        if hasattr(src, "stop"):
+            src.stop()
+        if ride.logger:
+            ride.logger.new_file()   # close the ride file
 
 
 if __name__ == "__main__":

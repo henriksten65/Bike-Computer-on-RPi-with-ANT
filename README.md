@@ -1,7 +1,7 @@
 # Bike Computer on RPi with ANT+
 
 A Raspberry Pi bike computer for power-meter pedals. The Pi receives power and cadence over
-**ANT+** (USB stick) or **Bluetooth LE**, and serves a live dashboard you open in a browser on
+**ANT+** (USB stick) or **Bluetooth LE**, plus heart rate from an ANT+ strap, and serves a live dashboard you open in a browser on
 your phone, tablet or laptop. You don't need an app or a cloud account.
 
 It was built for the **Magene P715** pedals on a Raspberry Pi 4. The program reads the standard
@@ -19,8 +19,15 @@ power meter ──ANT+──► USB stick ─────────► Raspber
 - **Cadence** and **moving time**, which pauses on its own when you stop pedalling
 - **Scrolling power graph** with a 1, 5 or 10 minute window or the whole ride, and optional
   left/right lines
-- **Ride stats**: average, normalized (NP) and max power, average L/R balance, average cadence, and work (kJ)
+- **Heart rate** from an ANT+ chest strap or watch (the tile appears once a strap is found)
+- **Ride stats**: average, normalized (NP) and max power, average L/R balance, average cadence,
+  average and max heart rate, and work (kJ)
 - **One CSV file per ride**, saved in `rides/` (the newest 10 are kept)
+- **Ride list** at `/rides`: past rides with their stats and a CSV download for each
+- **Power off and restart buttons** on the ride list page, so you can shut the Pi down safely
+  without a keyboard or SSH
+- Clear status messages when something is wrong, for example "ANT+ stick not found". The
+  program reconnects on its own when the stick is plugged back in.
 - Works in portrait and landscape, follows the system's light/dark setting, and keeps the phone
   screen on (Wake Lock API)
 - **Simulator mode**: try the dashboard on any computer with plain Python and nothing else
@@ -42,23 +49,32 @@ Open http://localhost:8080. Simulator mode needs only the Python standard librar
 - An **ANT+ USB stick**. Most sticks use Dynastream/Garmin IDs `0fcf:1008` or `0fcf:1009`.
   You don't need one if you use Bluetooth only.
 - A power meter that sends ANT+ Bicycle Power or Bluetooth Cycling Power.
+- Optional: an ANT+ heart rate strap, or a watch that broadcasts heart rate over ANT+.
 
 ## Install on the Raspberry Pi
 
 Flash **Raspberry Pi OS Lite (64-bit)** with Raspberry Pi Imager. In the Imager settings, enter
-your Wi-Fi details and enable SSH. Then, on the Pi:
+your Wi-Fi details and enable SSH. Then, on the Pi, as your normal user:
 
 ```bash
-sudo apt update && sudo apt install -y git python3-venv libusb-1.0-0
+sudo apt update && sudo apt install -y git
 git clone https://github.com/henriksten65/Bike-Computer-on-RPi-with-ANT.git
 cd Bike-Computer-on-RPi-with-ANT
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-
-# let a normal user open the ANT+ stick
-sudo cp deploy/99-ant-usb.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules && sudo udevadm trigger
+deploy/install.sh
 ```
+
+The install script asks for your password where it needs root. It:
+
+1. installs the system packages (`python3-venv`, `libusb-1.0-0`)
+2. creates the Python environment in `.venv` and installs the libraries
+3. lets normal users open the ANT+ stick (udev rule)
+4. lets your user power off and restart the Pi from the dashboard (a sudoers rule that allows
+   only `systemctl poweroff` and `systemctl reboot`)
+5. installs the `bikecomputer` service for your user and folder, and starts it at every boot
+
+You can run it again at any time, for example after moving the folder. To use Bluetooth or
+other options in the service, edit the `ExecStart` line in `deploy/bikecomputer.service` before
+running the script.
 
 Plug in the ANT+ stick and check that it shows up:
 
@@ -66,29 +82,28 @@ Plug in the ANT+ stick and check that it shows up:
 lsusb      # expect something like "ID 0fcf:1008 Dynastream Innovations"
 ```
 
-If your stick reports a different ID, add a line for it to `deploy/99-ant-usb.rules` and copy
-the file again.
+If your stick reports a different ID, add a line for it to `deploy/99-ant-usb.rules` and run
+the install script again.
 
 ## Ride
+
+The service is already running. Start pedalling to wake the pedals. On your phone, open
+`http://<pi-hostname>.local:8080` or `http://<pi-ip>:8080`. Use **Add to Home Screen** for a
+full-screen, app-like view.
+
+```bash
+journalctl -u bikecomputer -f       # watch the log ("ANT+ power meter found")
+sudo systemctl restart bikecomputer # after changing the code or the service
+```
+
+To run it by hand instead (stop the service first with `sudo systemctl stop bikecomputer`):
 
 ```bash
 .venv/bin/python bikecomputer.py --source ant
 ```
 
-Start pedalling to wake the pedals. The log prints `ANT+ power meter found`. On your phone, open
-`http://<pi-hostname>.local:8080` or `http://<pi-ip>:8080`. Use **Add to Home Screen** for a
-full-screen, app-like view.
-
-### Start automatically at boot
-
-Edit `deploy/bikecomputer.service` first: set `User`, `WorkingDirectory` and `ExecStart` to
-your user name and the folder you cloned into. Then:
-
-```bash
-sudo cp deploy/bikecomputer.service /etc/systemd/system/
-sudo systemctl enable --now bikecomputer
-journalctl -u bikecomputer -f      # watch the log
-```
+When you're done, open **Rides** on the dashboard and tap **Power off**. Wait until the Pi's
+green light stops flashing before you unplug it.
 
 ## Options
 
@@ -96,6 +111,8 @@ journalctl -u bikecomputer -f      # watch the log
 |---|---|
 | `--source ant\|ble\|sim` | ANT+ stick (default), the Pi's Bluetooth, or simulated data |
 | `--ant-device-id N` | Pair only with ANT+ device number N, useful when another rider's power meter is nearby. 0 = first one found |
+| `--ant-hr-device-id N` | The same for the ANT+ heart rate strap |
+| `--no-heart-rate` | Don't listen for an ANT+ heart rate strap |
 | `--ble-name NAME` / `--ble-address AA:BB:..` | Choose which Bluetooth device to connect to |
 | `--unknown-balance-side left\|right` | Change this if **left and right look reversed** (see below) |
 | `--port 8080` | Web server port |
@@ -132,8 +149,23 @@ chromium-browser --kiosk --noerrdialogs http://localhost:8080
 
 | Path | What it is |
 |---|---|
-| `bikecomputer.py` | Main program: web server, live updates and CSV logging |
-| `sources.py` | Data sources: ANT+, Bluetooth LE and the simulator |
-| `ride.py` | Ride state: 1-second samples, moving time and stats |
-| `static/index.html` | The dashboard (a single page) |
-| `deploy/` | systemd service and udev rule for the Pi |
+| `bikecomputer.py` | Main program: web server, live updates, power off |
+| `sources.py` | Data sources: ANT+ (power and heart rate), Bluetooth LE and the simulator |
+| `ride.py` | Ride state: 1-second samples, moving time, stats and normalized power |
+| `ridelog.py` | Ride CSV files: writing, keeping the newest 10, and reading them back for the ride list |
+| `static/index.html` | The dashboard |
+| `static/rides.html` | The ride list, with downloads and the power off button |
+| `deploy/` | Install script, systemd service template and udev rule for the Pi |
+| `tests/` | Tests |
+
+## Tests
+
+The tests need only Python, not the Pi or the ANT+ stick:
+
+```bash
+python3 -m unittest
+```
+
+## License
+
+[MIT](LICENSE)
