@@ -1,0 +1,4 @@
+# ANT+ USB sticks (Dynastream/Garmin IDs, also used by most third-party sticks).
+# Lets non-root users open the stick. Check yours with `lsusb`; add a line if the ID differs.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fcf", ATTRS{idProduct}=="1008", MODE="0666"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fcf", ATTRS{idProduct}=="1009", MODE="0666"

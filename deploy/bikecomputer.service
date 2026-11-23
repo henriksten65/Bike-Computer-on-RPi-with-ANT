@@ -1,0 +1,14 @@
+[Unit]
+Description=Bike computer (power meter dashboard)
+After=network-online.target bluetooth.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/bike-computer
+ExecStart=/home/pi/bike-computer/.venv/bin/python bikecomputer.py --source ant
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

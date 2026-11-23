@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111110">
+<title>Bike Computer</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg:            #111110;
+    --surface-1:     #1a1a19;
+    --surface-2:     #242422;
+    --border:        #34332f;
+    --text-primary:  #f0efec;
+    --text-secondary:#c3c2b7;
+    --text-muted:    #8d8c84;
+    --grid:          #2c2b28;
+    --series-total:  #199e70;   /* aqua  */
+    --series-left:   #3987e5;   /* blue  */
+    --series-right:  #d95926;   /* orange */
+    --ok:            #0ca30c;
+    --warn:          #c98500;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      color-scheme: light;
+      --bg:            #f3f3f1;
+      --surface-1:     #fcfcfb;
+      --surface-2:     #efeeeb;
+      --border:        #dcdbd6;
+      --text-primary:  #0b0b0b;
+      --text-secondary:#52514e;
+      --text-muted:    #75746f;
+      --grid:          #e6e5e1;
+      --series-total:  #1baf7a;
+      --series-left:   #2a78d6;
+      --series-right:  #eb6834;
+      --ok:            #008300;
+      --warn:          #b07000;
+    }
+  }
+  :root[data-theme="dark"] { color-scheme: dark; }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-variant-numeric: tabular-nums;
+    display: flex; flex-direction: column;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    gap: 10px;
+    overflow-x: hidden;
+  }
+
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--text-secondary); margin-right: auto; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--warn); }
+  .dot.ok { background: var(--ok); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button, .btn {
+    background: var(--surface-1); color: var(--text-secondary); border: 0;
+    font: inherit; font-size: 14px; padding: 8px 12px; cursor: pointer; min-height: 36px;
+  }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button[aria-pressed="true"] { background: var(--surface-2); color: var(--text-primary); font-weight: 600; }
+  .btn { border: 1px solid var(--border); border-radius: 8px; }
+
+  .tiles { display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 10px; }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 10px 14px; min-width: 0;
+  }
+  .label { font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; }
+  .value { font-weight: 700; line-height: 1.05; white-space: nowrap; }
+  .value small { font-size: .38em; font-weight: 500; color: var(--text-secondary); margin-left: .2em; }
+  .big   { font-size: clamp(56px, 10vw, 104px); }
+  .mid   { font-size: clamp(28px, 6vw, 64px); }
+
+  .lr { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px; }
+  .lr .side { min-width: 0; }
+  .lr .side.right { text-align: right; }
+  .key { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 6px; }
+  .balance { position: relative; height: 18px; border-radius: 9px; overflow: hidden; display: flex; gap: 2px; background: var(--surface-1); }
+  .balance .bl { background: var(--series-left);  transition: flex-basis .4s; }
+  .balance .br { background: var(--series-right); transition: flex-basis .4s; }
+  .balance .mid50 { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--text-primary); opacity: .6; }
+  .baltext { text-align: center; font-size: 14px; color: var(--text-secondary); margin-top: 6px; }
+
+  .stats { display: flex; gap: 18px; flex-wrap: wrap; font-size: 14px; color: var(--text-secondary); }
+  .stats b { color: var(--text-primary); font-weight: 600; }
+
+  .chart { flex: 1; min-height: 220px; position: relative; padding: 10px 6px 6px 6px; display: flex; flex-direction: column; }
+  .legend { display: flex; gap: 16px; font-size: 13px; color: var(--text-secondary); padding: 0 8px 6px; flex-wrap: wrap; }
+  .legend .key { width: 14px; height: 3px; border-radius: 2px; vertical-align: 3px; }
+  .plot { position: relative; flex: 1; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  .tip {
+    position: absolute; pointer-events: none; display: none; z-index: 2;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font-size: 13px; color: var(--text-primary); white-space: nowrap;
+    box-shadow: 0 4px 14px rgba(0,0,0,.25);
+  }
+  .tip .row { display: flex; justify-content: space-between; gap: 14px; }
+  .tip .row span:first-child { color: var(--text-secondary); }
+
+  @media (max-width: 640px) {
+    .tiles { grid-template-columns: 1fr 1fr; }
+    .tiles .power { grid-column: 1 / -1; order: -1; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <div class="status"><span class="dot" id="dot"></span><span id="status">Connecting…</span></div>
+    <div class="seg" id="smooth" title="Smoothing for the numbers">
+      <button data-v="1" aria-pressed="false">1s</button>
+      <button data-v="3" aria-pressed="true">3s</button>
+    </div>
+    <div class="seg" id="win" title="Graph window">
+      <button data-v="60">1m</button>
+      <button data-v="300">5m</button>
+      <button data-v="600">10m</button>
+      <button data-v="0">All</button>
+    </div>
+    <button class="btn" id="reset">Reset</button>
+  </header>
+
+  <section class="tiles">
+    <div class="tile">
+      <div class="label">Time</div>
+      <div class="value mid" id="time">0:00</div>
+    </div>
+    <div class="tile power">
+      <div class="label">Power</div>
+      <div class="value big" id="power">—<small>W</small></div>
+    </div>
+    <div class="tile">
+      <div class="label">Cadence</div>
+      <div class="value mid" id="cad">—<small>rpm</small></div>
+    </div>
+  </section>
+
+  <section class="tile lr">
+    <div class="side">
+      <div class="label"><span class="key" style="background:var(--series-left)"></span>Left</div>
+      <div class="value mid" id="left">—<small>W</small></div>
+    </div>
+    <div>
+      <div class="balance" aria-hidden="true"><div class="bl" id="bl" style="flex-basis:50%"></div><div class="br" id="br" style="flex-basis:50%"></div><div class="mid50"></div></div>
+      <div class="baltext" id="baltext">L — / R —</div>
+    </div>
+    <div class="side right">
+      <div class="label">Right<span class="key" style="background:var(--series-right);margin:0 0 0 6px"></span></div>
+      <div class="value mid" id="right">—<small>W</small></div>
+    </div>
+  </section>
+
+  <section class="stats" id="stats"></section>
+
+  <section class="tile chart">
+    <div class="legend">
+      <span><span class="key" style="background:var(--series-total)"></span>Total</span>
+      <span><span class="key" style="background:var(--series-left)"></span>Left</span>
+      <span><span class="key" style="background:var(--series-right)"></span>Right</span>
+    </div>
+    <div class="plot" id="plot">
+      <canvas id="cv" aria-label="Power over time: total, left and right pedal"></canvas>
+      <div class="tip" id="tip"></div>
+    </div>
+  </section>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let history = [];          // samples recorded while moving
+  let latest = null;         // last sample from server
+  let windowS = 300;
+  let smoothS = 3;
+  let hoverX = null;
+
+  // ---------- persisted preferences (best effort)
+  try {
+    const w = localStorage.getItem("bc.win"); if (w !== null) windowS = +w;
+    const s = localStorage.getItem("bc.smooth"); if (s !== null) smoothS = +s;
+  } catch (e) {}
+  function setupSeg(id, get, set) {
+    const btns = [...$(id).querySelectorAll("button")];
+    const sync = () => btns.forEach(b => b.setAttribute("aria-pressed", String(+b.dataset.v === get())));
+    btns.forEach(b => b.onclick = () => { set(+b.dataset.v); sync(); render(); });
+    sync();
+  }
+  setupSeg("win", () => windowS, v => { windowS = v; try { localStorage.setItem("bc.win", v); } catch (e) {} });
+  setupSeg("smooth", () => smoothS, v => { smoothS = v; try { localStorage.setItem("bc.smooth", v); } catch (e) {} });
+
+  $("reset").onclick = () => {
+    if (confirm("Reset the ride? (timer, graph and averages)")) fetch("/api/reset", { method: "POST" });
+  };
+
+  // ---------- formatting
+  const fmtTime = s => {
+    s = Math.floor(s || 0);
+    const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, ss = String(s % 60).padStart(2, "0");
+    return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+  };
+  const num = (v, unit) => `${v == null ? "—" : Math.round(v)}<small>${unit}</small>`;
+  const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  // ---------- numbers
+  function smoothed() {
+    // Average of the last `smoothS` seconds; falls back to the live sample when stopped.
+    if (!latest) return null;
+    if (!latest.moving || smoothS <= 1 || history.length === 0) return latest;
+    const tail = history.slice(-smoothS);
+    const avg = k => {
+      const v = tail.map(s => s[k]).filter(x => x != null);
+      return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+    };
+    return { p: avg("p"), l: avg("l"), r: avg("r"), c: avg("c") };
+  }
+
+  function renderNumbers() {
+    if (!latest) return;
+    const st = latest.stats || {};
+    $("time").textContent = fmtTime(st.elapsed);
+    const s = smoothed();
+    $("power").innerHTML = num(s.p, "W");
+    $("cad").innerHTML = num(s.c, "rpm");
+    $("left").innerHTML = num(s.l, "W");
+    $("right").innerHTML = num(s.r, "W");
+    const tot = (s.l || 0) + (s.r || 0);
+    if (s.l != null && tot > 0) {
+      const lp = Math.round(100 * s.l / tot);
+      $("bl").style.flexBasis = lp + "%";
+      $("br").style.flexBasis = (100 - lp) + "%";
+      $("baltext").textContent = `L ${lp}% / R ${100 - lp}%`;
+    } else {
+      $("baltext").textContent = "L — / R —";
+    }
+    const balTot = (st.avg_l || 0) + (st.avg_r || 0);
+    const avgBal = balTot > 0 ? `${Math.round(100 * st.avg_l / balTot)}/${Math.round(100 * st.avg_r / balTot)}` : "—";
+    $("stats").innerHTML =
+      `<span>Avg <b>${st.avg_p ?? "—"} W</b></span>` +
+      `<span>Max <b>${st.max_p ?? "—"} W</b></span>` +
+      `<span>Avg L/R <b>${avgBal}</b></span>` +
+      `<span>Avg cad <b>${st.avg_c ?? "—"} rpm</b></span>` +
+      `<span>Work <b>${st.kj ?? "—"} kJ</b></span>`;
+
+    const dot = $("dot");
+    dot.classList.toggle("ok", !!latest.connected);
+    $("status").textContent = latest.connected
+      ? (latest.moving ? "Receiving" : "Connected · paused")
+      : "Searching for pedals…";
+  }
+
+  // ---------- chart
+  const cv = $("cv"), ctx = cv.getContext("2d"), plot = $("plot"), tip = $("tip");
+  const PAD = { l: 44, r: 54, t: 8, b: 24 };
+
+  function visible() {
+    if (!history.length) return [];
+    if (!windowS) return history;
+    const tEnd = history[history.length - 1].t;
+    let i = history.length - 1;
+    while (i > 0 && history[i - 1].t >= tEnd - windowS) i--;
+    return history.slice(i);
+  }
+
+  function niceStep(max) {
+    const raw = max / 5, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    for (const m of [1, 2, 2.5, 5, 10]) if (m * mag >= raw) return m * mag;
+    return 10 * mag;
+  }
+
+  function render() {
+    renderNumbers();
+    const dpr = window.devicePixelRatio || 1;
+    const W = plot.clientWidth, H = plot.clientHeight;
+    if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
+      cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    const data = visible();
+    const pw = W - PAD.l - PAD.r, ph = H - PAD.t - PAD.b;
+    const tEnd = data.length ? data[data.length - 1].t : 0;
+    const span = windowS || Math.max(60, tEnd - (data[0] ? data[0].t : 0));
+    // Fill from the left until the ride is longer than the window, then scroll.
+    const t0 = windowS ? Math.max(0, tEnd - windowS) : (data[0] ? data[0].t : 0);
+    const maxP = Math.max(300, ...data.map(s => s.p || 0));
+    const step = niceStep(maxP * 1.08);
+    const yMax = Math.ceil(maxP * 1.08 / step) * step;
+    const x = t => PAD.l + (t - t0) / span * pw;
+    const y = p => PAD.t + ph - (p / yMax) * ph;
+
+    // grid + y labels
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillStyle = css("--text-muted");
+    ctx.strokeStyle = css("--grid");
+    ctx.lineWidth = 1;
+    ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    for (let v = 0; v <= yMax; v += step) {
+      const yy = Math.round(y(v)) + .5;
+      ctx.beginPath(); ctx.moveTo(PAD.l, yy); ctx.lineTo(PAD.l + pw, yy); ctx.stroke();
+      ctx.fillText(v, PAD.l - 8, yy);
+    }
+    // x labels (elapsed time)
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    const xStep = span <= 60 ? 15 : span <= 300 ? 60 : span <= 600 ? 120 : niceStep(span) ;
+    for (let t = Math.ceil(Math.max(0, t0) / xStep) * xStep; t <= tEnd; t += xStep) {
+      ctx.fillText(fmtTime(t), x(t), PAD.t + ph + 6);
+    }
+
+    if (data.length < 2) {
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = css("--text-muted"); ctx.font = "15px system-ui, sans-serif";
+      ctx.fillText("Start pedalling — the graph fills in as you ride", PAD.l + pw / 2, PAD.t + ph / 2);
+      tip.style.display = "none";
+      return;
+    }
+
+    // series, drawn back-to-front: left, right, then total on top
+    const series = [
+      { k: "l", color: css("--series-left"),  name: "Left" },
+      { k: "r", color: css("--series-right"), name: "Right" },
+      { k: "p", color: css("--series-total"), name: "Total" },
+    ];
+    ctx.save();
+    ctx.beginPath(); ctx.rect(PAD.l, PAD.t - 2, pw, ph + 4); ctx.clip();
+    ctx.lineJoin = "round"; ctx.lineCap = "round";
+    for (const s of series) {
+      ctx.strokeStyle = s.color; ctx.lineWidth = 2;
+      ctx.beginPath();
+      let pen = false, prevT = null;
+      for (const d of data) {
+        const v = d[s.k];
+        // break the line across gaps (pauses) and missing balance values
+        if (v == null || (prevT != null && d.t - prevT > 2.5)) { pen = false; }
+        if (v != null) { pen ? ctx.lineTo(x(d.t), y(v)) : ctx.moveTo(x(d.t), y(v)); pen = true; }
+        prevT = d.t;
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // direct labels at the right end of each line (text ink, coloured key), de-collided
+    const last = data[data.length - 1];
+    const labels = series.filter(s => last[s.k] != null)
+      .map(s => ({ ...s, v: last[s.k], yy: y(last[s.k]) }))
+      .sort((a, b) => a.yy - b.yy);
+    for (let i = 1; i < labels.length; i++)
+      if (labels[i].yy - labels[i - 1].yy < 15) labels[i].yy = labels[i - 1].yy + 15;
+    ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.font = "600 12px system-ui, sans-serif";
+    for (const lb of labels) {
+      ctx.fillStyle = lb.color;
+      ctx.fillRect(PAD.l + pw + 6, lb.yy - 1.5, 8, 3);
+      ctx.fillStyle = css("--text-primary");
+      ctx.fillText(Math.round(lb.v), PAD.l + pw + 18, lb.yy);
+    }
+
+    // hover / touch crosshair + tooltip
+    if (hoverX != null && hoverX >= PAD.l && hoverX <= PAD.l + pw) {
+      const tHover = t0 + (hoverX - PAD.l) / pw * span;
+      let best = data[0];
+      for (const d of data) if (Math.abs(d.t - tHover) < Math.abs(best.t - tHover)) best = d;
+      const xx = Math.round(x(best.t)) + .5;
+      ctx.strokeStyle = css("--text-muted"); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(xx, PAD.t); ctx.lineTo(xx, PAD.t + ph); ctx.stroke();
+      for (const s of series) {
+        if (best[s.k] == null) continue;
+        ctx.beginPath(); ctx.arc(xx, y(best[s.k]), 4, 0, Math.PI * 2);
+        ctx.fillStyle = s.color; ctx.fill();
+        ctx.lineWidth = 2; ctx.strokeStyle = css("--surface-1"); ctx.stroke();
+      }
+      const row = (k, v) => `<div class="row"><span>${k}</span><b>${v}</b></div>`;
+      tip.innerHTML = `<div style="margin-bottom:4px;color:var(--text-muted)">${fmtTime(best.t)}</div>` +
+        row("Total", `${best.p} W`) +
+        row("Left", best.l == null ? "—" : `${best.l} W`) +
+        row("Right", best.r == null ? "—" : `${best.r} W`) +
+        row("Cadence", best.c == null ? "—" : `${best.c} rpm`);
+      tip.style.display = "block";
+      const tw = tip.offsetWidth;
+      tip.style.left = (xx + 12 + tw > W ? xx - 12 - tw : xx + 12) + "px";
+      tip.style.top = PAD.t + "px";
+    } else {
+      tip.style.display = "none";
+    }
+  }
+
+  const setHover = e => { const r = cv.getBoundingClientRect(); hoverX = e.clientX - r.left; render(); };
+  cv.addEventListener("pointermove", setHover);
+  cv.addEventListener("pointerdown", setHover);
+  cv.addEventListener("pointerleave", () => { hoverX = null; render(); });
+  window.addEventListener("resize", render);
+  matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", render);
+
+  // ---------- data
+  async function loadHistory() {
+    try {
+      const r = await fetch("/api/history");
+      const j = await r.json();
+      history = j.history || [];
+    } catch (e) {}
+  }
+
+  function connect() {
+    const es = new EventSource("/events");
+    es.onopen = () => loadHistory().then(render);
+    es.onmessage = ev => {
+      const m = JSON.parse(ev.data);
+      if (m.type === "reset") { history = []; latest = null; render(); return; }
+      latest = m;
+      if (m.moving) history.push({ t: m.t, p: m.p, l: m.l, r: m.r, c: m.c });
+      if (history.length > 7200) history.splice(0, history.length - 7200);
+      render();
+    };
+    es.onerror = () => {
+      $("dot").classList.remove("ok");
+      $("status").textContent = "Lost connection to the bike computer — retrying…";
+    };
+  }
+
+  render();
+  connect();
+
+  // Keep the screen awake while the page is open (where supported).
+  async function wake() { try { await navigator.wakeLock?.request("screen"); } catch (e) {} }
+  wake();
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") wake(); });
+})();
+</script>
+</body>
+</html>
