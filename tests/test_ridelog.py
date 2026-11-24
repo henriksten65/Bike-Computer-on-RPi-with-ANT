@@ -17,6 +17,12 @@ def sample(t, p=200, l=100, r=100, c=90, h=None, lap=1, wall=1795430000.0):
     return {"t": t, "wall": wall + t, "p": p, "l": l, "r": r, "c": c, "h": h, "lap": lap}
 
 
+def path_of(lg: CsvLogger) -> str:
+    """The open ride file's path (fails the test if there is none)."""
+    assert lg.path is not None, "no ride file"
+    return lg.path
+
+
 class CsvLoggerTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -31,7 +37,7 @@ class CsvLoggerTest(unittest.TestCase):
         lg.write(sample(1, h=140), ftp=250)
         lg.write(sample(2))
         lg.new_file()
-        with open(lg.path, newline="") as f:
+        with open(path_of(lg), newline="") as f:
             rows = list(csv.reader(f))
         self.assertEqual(rows[0], ridelog.COLUMNS)
         self.assertEqual(rows[1][1:], ["1", "200", "100", "100", "90", "140", "1", "250"])
@@ -48,7 +54,7 @@ class CsvLoggerTest(unittest.TestCase):
         rides = [n for n in names if n.startswith("ride-")]
         self.assertEqual(len(rides), 10)
         self.assertIn("notes.txt", names)
-        self.assertIn(os.path.basename(lg.path), rides)
+        self.assertIn(os.path.basename(path_of(lg)), rides)
         self.assertNotIn("ride-20261112-120000.csv", rides)
         lg.new_file()
 
@@ -65,11 +71,11 @@ class CsvLoggerTest(unittest.TestCase):
         os.chmod(self.dir, 0o555)
         lg = CsvLogger(self.dir)
         lg.write(sample(1))                       # must not raise
-        self.assertIn("Can't save the ride", lg.error)
+        self.assertIn("Can't save the ride", lg.error or "")
         os.chmod(self.dir, 0o755)
         lg.write(sample(2))
         self.assertIsNone(lg.error)
-        self.assertTrue(os.path.exists(lg.path))
+        self.assertTrue(os.path.exists(path_of(lg)))
         lg.new_file()
 
 
@@ -180,7 +186,7 @@ class TcxTest(TcxBase):
         with open(path, "w", newline="") as f:
             f.write("time_iso,elapsed_s,power_w,left_w,right_w,cadence_rpm\n2026-11-23T16:22:08,1.0,36,,,21\n")
         doc = ET.fromstring(ridelog.to_tcx(path))
-        self.assertEqual(doc.find(".//t:Trackpoint/t:Time", self.NS).text, "2026-11-23T15:22:08Z")
+        self.assertEqual(doc.findtext(".//t:Trackpoint/t:Time", namespaces=self.NS), "2026-11-23T15:22:08Z")
 
     def test_missing_values_are_left_out(self):
         doc = self.tcx([["2026-07-01T10:00:00", 1, 200, "", "", "", ""]])
@@ -301,14 +307,14 @@ class ShiftTimesTest(unittest.TestCase):
         with mock.patch("ridelog.clock.now", return_value=wall):
             lg.write(sample(1, wall=wall - 1))
             lg.write(sample(2, wall=wall - 1))
-        self.assertTrue(os.path.basename(lg.path).startswith("ride-20260101-10"))
+        self.assertTrue(os.path.basename(path_of(lg)).startswith("ride-20260101-10"))
         lg.shift_times(86400)                                  # it was really 2 January
         lg.write(sample(3, wall=wall - 1 + 86400))
         lg.new_file()
         names = os.listdir(self.tmp.name)
-        self.assertEqual(names, [os.path.basename(lg.path)])
+        self.assertEqual(names, [os.path.basename(path_of(lg))])
         self.assertTrue(names[0].startswith("ride-20260102-10"), names)
-        with open(lg.path, newline="") as f:
+        with open(path_of(lg), newline="") as f:
             rows = list(csv.reader(f))
         self.assertEqual([r[0][:19] for r in rows[1:]],
                          ["2026-01-02T10:00:00", "2026-01-02T10:00:01", "2026-01-02T10:00:02"])
@@ -339,10 +345,10 @@ class FixesTest(unittest.TestCase):
             open(os.path.join(self.tmp.name, f"ride-209901{d}-120000.csv"), "w").close()
         lg = CsvLogger(self.tmp.name, keep=10)
         lg.write(sample(1, wall=time.time()))
-        self.assertTrue(os.path.exists(lg.path))
+        self.assertTrue(os.path.exists(path_of(lg)))
         lg.write(sample(2, wall=time.time()))
         lg.new_file()
-        with open(lg.path) as f:
+        with open(path_of(lg)) as f:
             self.assertEqual(len(f.readlines()), 3)
 
     def test_times_are_saved_with_their_utc_offset(self):
@@ -351,7 +357,7 @@ class FixesTest(unittest.TestCase):
         with mock.patch("ridelog.clock.now", return_value=wall):
             lg.write(sample(0, wall=wall))
         lg.new_file()
-        with open(lg.path, newline="") as f:
+        with open(path_of(lg), newline="") as f:
             self.assertEqual(list(csv.reader(f))[1][0], "2026-07-01T10:00:00+02:00")
 
     def test_tcx_times_stay_apart_when_the_clocks_go_back(self):

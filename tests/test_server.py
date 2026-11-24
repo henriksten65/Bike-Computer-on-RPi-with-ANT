@@ -9,6 +9,7 @@ import tempfile
 import threading
 import unittest
 from http.server import ThreadingHTTPServer
+from typing import Any
 from unittest import mock
 
 import bikecomputer
@@ -18,6 +19,15 @@ from ridelog import CsvLogger
 
 class ServerBase(unittest.TestCase):
     """Starts a server on a free port with a temporary rides folder."""
+
+    # Set in setUpClass.
+    tmp: tempfile.TemporaryDirectory
+    dir: str
+    ride: Ride
+    settings: str
+    server: ThreadingHTTPServer
+    handler: Any                   # the Handler class from make_handler
+    port: int
 
     @classmethod
     def setUpClass(cls):
@@ -30,9 +40,8 @@ class ServerBase(unittest.TestCase):
             f.write("not for download")
         cls.ride = Ride(logger=CsvLogger(cls.dir))
         cls.settings = os.path.join(cls.dir, "settings.json")
-        cls.server = ThreadingHTTPServer(("127.0.0.1", 0),
-                                         bikecomputer.make_handler(cls.ride, bikecomputer.Hub(), cls.dir,
-                                                                   cls.settings))
+        cls.handler = bikecomputer.make_handler(cls.ride, bikecomputer.Hub(), cls.dir, cls.settings)
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), cls.handler)
         cls.server.daemon_threads = True
         cls.port = cls.server.server_address[1]
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
@@ -205,7 +214,7 @@ class PinTest(ServerBase):
 
     def guard_reset(self):
         # Reset the lockout between tests.
-        pins = self.server.RequestHandlerClass.pins
+        pins = self.handler.pin_guard
         pins.failures, pins.locked_until = 0, 0.0
 
     def post_pin(self, path, body, pin=None):

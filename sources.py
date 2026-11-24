@@ -149,8 +149,10 @@ class AntSource:
                     break
                 log.error("ANT+ error: %s: %s; retrying in 5 s", type(e).__name__, e)
                 self.ride.set_source_status("error", _ant_error_text(e))
+                node = self.node
                 try:
-                    self.node.stop()
+                    if node is not None:
+                        node.stop()
                 except Exception:
                     pass
                 time.sleep(5)

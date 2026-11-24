@@ -97,6 +97,9 @@
   .value small { font-size: .38em; font-weight: 500; color: var(--text-secondary); margin-left: .2em; }
   .big   { font-size: clamp(56px, 10vw, 104px); }
   .mid   { font-size: clamp(28px, 6vw, 64px); }
+  /* the intense interval going on (HIIT), under the ride time */
+  .intense { margin-top: 4px; font-weight: 700; font-size: clamp(18px, 3.6vw, 36px); color: var(--z6); white-space: nowrap; }
+  .intense small { font-size: .5em; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; margin-right: .4em; vertical-align: .2em; }
 
   .lr { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px; }
   .lr .side { min-width: 0; }
@@ -174,6 +177,7 @@
     <div class="tile">
       <div class="label">Time</div>
       <div class="value mid" id="time">0:00</div>
+      <div class="intense" id="intense" title="How long this intense interval has lasted" hidden><small>Hard</small><span id="intenseT"></span></div>
     </div>
     <div class="tile power">
       <div class="label">Power<span class="zone" id="zone"></span></div>
@@ -223,6 +227,7 @@
         <button data-v="60">1m</button>
         <button data-v="300">5m</button>
         <button data-v="600">10m</button>
+        <button data-v="1200">20m</button>
         <button data-v="0">All</button>
       </div>
     </div>
@@ -317,6 +322,9 @@
     const st = latest.stats || {};
     const ftp = st.ftp;
     $("time").textContent = fmtTime(st.elapsed);
+    // An intense interval going on: its own timer, gone when it ends.
+    $("intense").hidden = st.intense_s == null;
+    if (st.intense_s != null) $("intenseT").textContent = fmtTime(st.intense_s);
     const s = smoothed();
     $("power").innerHTML = num(s.p, "W");
     const z = latest.moving ? zoneOf(s.p, ftp) : null;
@@ -484,14 +492,26 @@
     const span = windowS || Math.max(60, tEnd - (data[0] ? data[0].t : 0));
     // Fill from the left until the ride is longer than the window, then scroll.
     const t0 = windowS ? Math.max(0, tEnd - windowS) : (data[0] ? data[0].t : 0);
-    let maxP = 300, maxH = 0;
-    for (const d of data) { if (d.p > maxP) maxP = d.p; if (d.h > maxH) maxH = d.h; }
+    // The scales fit the lines shown in this window: power from 0 up to the highest
+    // shown value (total, or a pedal line if it is higher), heart rate from its lowest
+    // to its highest value in the window.
+    let maxP = 0, minH = Infinity, maxH = 0;
+    for (const d of data) {
+      if (d.p > maxP) maxP = d.p;
+      if (showL && d.l > maxP) maxP = d.l;
+      if (showR && d.r > maxP) maxP = d.r;
+      if (d.h != null) { if (d.h > maxH) maxH = d.h; if (d.h < minH) minH = d.h; }
+    }
+    maxP = Math.max(maxP, 50);                   // nothing shown yet: still a sensible scale
     const step = niceStep(maxP * 1.08);
     const yMax = Math.ceil(maxP * 1.08 / step) * step;
+    cv.dataset.yMax = yMax;                      // read by the browser tests
     const x = t => PAD.l + (t - t0) / span * pw;
     const y = p => PAD.t + ph - (p / yMax) * ph;
-    // Heart rate gets its own scale: 40 bpm at the bottom, at least 200 at the top.
-    const hMin = 40, hMax = Math.max(200, Math.ceil((maxH + 10) / 10) * 10);
+    // Heart rate gets its own scale (no axis, the line is labelled): 10 bpm of room
+    // on each side, rounded to 10, and at least 40 bpm from bottom to top.
+    let hMin = Math.floor((minH - 10) / 10) * 10, hMax = Math.ceil((maxH + 10) / 10) * 10;
+    if (hMax - hMin < 40) { const mid = (hMin + hMax) / 2; hMin = mid - 20; hMax = mid + 20; }
     const yh = h => PAD.t + ph - ((h - hMin) / (hMax - hMin)) * ph;
 
     // power zone bands (faint), with Z labels on the left inside the plot

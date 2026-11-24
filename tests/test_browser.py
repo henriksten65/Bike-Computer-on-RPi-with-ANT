@@ -19,11 +19,13 @@ import tempfile
 import time
 import unittest
 import urllib.request
+from typing import Any, Optional
 
 try:
     from playwright.sync_api import sync_playwright
+    HAVE_PLAYWRIGHT = True
 except ImportError:          # not installed: skip the whole module
-    sync_playwright = None
+    HAVE_PLAYWRIGHT = False
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PHONE = {"width": 390, "height": 844}
@@ -36,12 +38,21 @@ def free_port():
         return s.getsockname()[1]
 
 
-if sync_playwright is None and os.environ.get("REQUIRE_BROWSER"):
+if not HAVE_PLAYWRIGHT and os.environ.get("REQUIRE_BROWSER"):
     raise ImportError("REQUIRE_BROWSER is set but Playwright is not installed")
 
 
-@unittest.skipIf(sync_playwright is None, "Playwright is not installed")
+@unittest.skipIf(not HAVE_PLAYWRIGHT, "Playwright is not installed")
 class BrowserTest(unittest.TestCase):
+    # Set in setUpClass.
+    tmp: tempfile.TemporaryDirectory
+    port: int
+    base: str
+    server: subprocess.Popen
+    pw: Any
+    browser: Any
+    shots: Optional[str]
+
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
@@ -247,6 +258,32 @@ class BrowserTest(unittest.TestCase):
         self.assertLess(ms, 250, f"one redraw of a 4 h ride takes {ms:.0f} ms")
         self.shot(page, "dashboard-long-ride")
 
+    def test_twenty_minute_window(self):
+        # 30 minutes of riding: almost 10 hard, then 20 easy, with a heart rate. The hard
+        # part ends 10 s before the 20 minute window starts, so it's not on the graph.
+        n = 1800
+        cols = {"t": list(range(1, n + 1)), "p": [400 if i < 590 else 120 for i in range(n)],
+                "l": [None] * n, "r": [None] * n, "c": [90] * n,
+                "h": [160 if i < 590 else 130 for i in range(n)], "lap": [1] * n}
+        body = json.dumps({"history": cols, "stats": {}})
+        ctx = self.browser.new_context(viewport=PHONE)
+        self.addCleanup(ctx.close)
+        page = ctx.new_page()
+        errors = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.route("**/api/history", lambda route: route.fulfill(body=body, content_type="application/json"))
+        page.goto(self.base + "/")
+        page.click("#win button[data-v='1200']")
+        self.assertEqual(page.get_attribute("#win button[data-v='1200']", "aria-pressed"), "true")
+        self.assertEqual(page.evaluate("localStorage.getItem('bc.win')"), "1200")
+        page.wait_for_timeout(1500)
+        self.assertEqual(errors, [])
+        # The power scale fits the easy 120 W in the window, not the 400 W before it.
+        self.assertEqual(page.get_attribute("#cv", "data-y-max"), "150")
+        self.shot(page, "dashboard-20-minutes")
+        page.reload()                                            # the choice is remembered
+        self.assertEqual(page.get_attribute("#win button[data-v='1200']", "aria-pressed"), "true")
+
     def test_lap_without_cadence_shows_a_dash(self):
         # A sample whose finished lap has no cadence (a meter without it, or all coasting).
         lap = {"n": 1, "elapsed": 60.0, "avg_p": 150, "np": 150, "max_p": 180, "if": None,
@@ -265,6 +302,36 @@ class BrowserTest(unittest.TestCase):
         table = page.inner_text("#laps")
         self.assertNotIn("null", table)
         self.assertNotIn("undefined", table)
+
+    def test_intense_interval_timer(self):
+        def open_with(intense_s):
+            msg = {"type": "sample", "t": 1501, "p": 320, "l": None, "r": None, "c": 105, "h": 172,
+                   "lap": 1, "moving": True, "connected": True, "source": {}, "log_error": None,
+                   "stats": {"avg_p": 180, "elapsed": 1501, "ftp": 250, "intense_s": intense_s,
+                             "laps": [], "lap": {"n": 1, "elapsed": 1501.0}}}
+            ctx = self.browser.new_context(viewport=PHONE)
+            self.addCleanup(ctx.close)
+            page = ctx.new_page()
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.route("**/events", lambda route: route.fulfill(
+                body=f"data: {json.dumps(msg)}\n\n", content_type="text/event-stream"))
+            page.goto(self.base + "/")
+            page.wait_for_function("document.getElementById('time').textContent === '25:01'", timeout=5000)
+            self.assertEqual(errors, [])
+            return page
+
+        page = open_with(72)
+        self.assertTrue(page.is_visible("#intense"))
+        self.assertEqual(page.inner_text("#intenseT"), "1:12")
+        # Fits in the Time tile next to three others (heart rate is showing).
+        fits = page.evaluate("""() => {
+            const el = document.getElementById('intense'), tile = el.parentElement;
+            return el.scrollWidth <= el.clientWidth && el.getBoundingClientRect().right <= tile.getBoundingClientRect().right;
+        }""")
+        self.assertTrue(fits)
+        self.shot(page, "dashboard-intense-interval")
+        self.assertFalse(open_with(None).is_visible("#intense"))
 
     def test_wrong_pin_is_not_kept(self):
         self.post("/api/settings", {"pin": "1357"})

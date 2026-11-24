@@ -22,10 +22,12 @@ heart rate strap ──ANT+ or BLE───────────────�
 
 - **Power**: total, left and right, in big numbers with an L/R balance bar
 - **Cadence** and **moving time**, which pauses on its own when you stop pedalling
-- **Scrolling graph** of power with a 1, 5 or 10 minute window or the whole ride (up to 12 hours),
+- **Scrolling graph** of power with a 1, 5, 10 or 20 minute window or the whole ride (up to 12 hours),
   with optional left/right and heart rate lines
 - **Heart rate** from an ANT+ or Bluetooth chest strap or watch (the tile appears once a strap is
   found)
+- **Interval timer** for HIIT: shows how long you've been riding hard, under the ride time, and
+  goes away when you ease off
 - **Ride stats**: average, normalized (NP) and max power, average L/R balance, average cadence,
   average and max heart rate, work (kJ) and an estimate of the food energy burned (kcal,
   assuming 24% efficiency unless you set your own on the Rides page). Average cadence leaves
@@ -150,6 +152,21 @@ become separate laps in the TCX file.
 
 When you're done, open **Rides** on the dashboard and tap **Power off**. Wait until the Pi's
 green light stops flashing before you unplug it.
+
+### Intervals (HIIT)
+
+When you start riding hard, a red **Hard** timer appears under the ride time and counts how
+long the interval has lasted. When you ease off, it goes away; nothing needs pressing.
+
+- **Hard** means above your threshold, 105 % of FTP (zone 5 and up). Without an FTP, it means
+  1.5 times your average over the last two minutes of easier riding, and at least 150 W. That
+  needs a minute of riding first.
+- The timer starts after 3 seconds at that level and counts from the first of them, so a short
+  spike doesn't start one.
+- It ends after 5 seconds below 85 % of that level, so changing gear or fading a little at the
+  end of a long interval doesn't end it. Stopping ends it too.
+
+Setting your FTP makes this match your own fitness; see above.
 
 ### PIN
 
@@ -302,7 +319,8 @@ On older Raspberry Pi OS versions the command is `chromium-browser`.
 | `deploy/` | Install script, Wi-Fi hotspot script, systemd service template and udev rule for the Pi |
 | `CHANGELOG.md` | What changed in each version |
 | `tests/` | Tests, including `test_browser.py`, which opens the pages in a real browser |
-| `.github/workflows/tests.yml` | Runs the tests on GitHub on every push |
+| `.github/workflows/tests.yml` | Runs the tests and mypy on GitHub on every push |
+| `mypy.ini` | Type checking settings |
 
 ## Tests
 
@@ -325,6 +343,16 @@ SCREENSHOT_DIR=screenshots python3 -m unittest tests.test_browser
 
 On GitHub it runs on every push, and the screenshots (phone and desktop, light and dark) are
 kept with each run under **Actions**.
+
+### Type checking
+
+The Python code is checked with [mypy](https://mypy-lang.org/); the settings are in `mypy.ini`:
+
+```bash
+pip install mypy && mypy
+```
+
+GitHub runs it on every push too.
 
 ## License
 

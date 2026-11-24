@@ -139,6 +139,61 @@ def training_stress(seconds, np_w, ftp):
     return round(seconds / 3600 * (np_w / ftp) ** 2 * 100)
 
 
+# Intense intervals (HIIT). With an FTP, power above threshold (zone 5 and up) is intense.
+# Without one, power well above what the rider was doing before the interval is.
+INTENSE_OF_FTP = 1.05
+INTENSE_OF_BASELINE = 1.5    # x the average of the last easy riding
+INTENSE_MIN_W = 150          # ... but never below this, so a warm-up doesn't count
+BASELINE_S = 120             # easy riding to average for the baseline
+BASELINE_MIN_S = 60          # no detection without an FTP until there's this much
+INTENSE_START_S = 3          # seconds in a row at the level to start an interval
+INTENSE_KEEP = 0.85          # an interval goes on while power is at least this x the level
+INTENSE_END_S = 5            # seconds in a row below that to end it
+
+
+class IntenseDetector:
+    """Notices when the rider starts an intense interval and times it.
+
+    Starts after INTENSE_START_S seconds in a row at the intense level (counted
+    from the first of them), so a single spike doesn't start one. Ends after
+    INTENSE_END_S seconds in a row below INTENSE_KEEP x that level, so a gear
+    change or a fading last few seconds don't end it. One call per second,
+    moving or not: stopping ends an interval.
+    """
+
+    def __init__(self):
+        self.seconds: Optional[int] = None   # length of the interval going on, or None
+        self._above = 0
+        self._below = 0
+        self._baseline: deque[float] = deque(maxlen=BASELINE_S)
+
+    def level(self, ftp) -> Optional[float]:
+        """Power (W) at which an interval starts, or None if it can't be told yet."""
+        if ftp:
+            return INTENSE_OF_FTP * ftp
+        if len(self._baseline) < BASELINE_MIN_S:
+            return None
+        return max(INTENSE_MIN_W, INTENSE_OF_BASELINE * sum(self._baseline) / len(self._baseline))
+
+    def add(self, power, moving, ftp=None):
+        level = self.level(ftp)      # the baseline doesn't change during an interval
+        if self.seconds is None:
+            if moving and level is not None and power >= level:
+                self._above += 1
+                if self._above >= INTENSE_START_S:
+                    self.seconds, self._below = self._above, 0
+            else:
+                self._above = 0
+                if moving:
+                    self._baseline.append(power)
+        else:
+            self.seconds += 1
+            hard = moving and level is not None and power >= INTENSE_KEEP * level
+            self._below = 0 if hard else self._below + 1
+            if self._below >= INTENSE_END_S:
+                self.seconds, self._above = None, 0
+
+
 @dataclass
 class Reading:
     """One update from a power meter, already decoded by a source."""
@@ -164,7 +219,7 @@ class Totals:
         self.sum_hr = 0.0
         self.n_hr = 0
         self.max_hr = 0
-        self._np_window = deque(maxlen=NP_WINDOW_S)  # last 30 s of power
+        self._np_window: deque[float] = deque(maxlen=NP_WINDOW_S)  # last 30 s of power
         self._np_sum4 = 0.0                        # sum of (30 s average) ** 4
         self._np_n = 0
 
@@ -234,7 +289,7 @@ class Ride:
     def reset(self):
         with self._lock:
             self._bucket = []          # readings received during the current second
-            self._last_reading = None  # last Reading, for stale detection
+            self._last_reading: Optional[Reading] = None  # last Reading, for stale detection
             self.elapsed = 0.0         # moving time, seconds
             self.history = []          # list of sample dicts
             self.total = Totals()      # the whole ride
@@ -242,6 +297,7 @@ class Ride:
             self.laps = []             # finished laps (Totals)
             self.started_wall = None
             self._hr = None                 # (bpm, monotonic time) of the last heart rate
+            self.intense = IntenseDetector()
             # Inside the lock: never close the file while tick() is writing to it.
             if self.logger:
                 self.logger.new_file()
@@ -279,7 +335,7 @@ class Ride:
     def set_source_status(self, level: str, text: str):
         self.source_status = {"level": level, "text": text}
 
-    def add_heart_rate(self, bpm: int, ts: float = None):
+    def add_heart_rate(self, bpm: int, ts: Optional[float] = None):
         """Heart rate from a strap; kept separately from the power meter's readings."""
         with self._lock:
             self._hr = (bpm, time.monotonic() if ts is None else ts)
@@ -329,7 +385,7 @@ class Ride:
                     right = power - left
                 else:
                     left = right = None
-            elif connected:
+            elif connected and last is not None:   # (connected implies a reading)
                 # Meter is alive but sent nothing this second: hold last values.
                 power = last.power
                 cadence = last.cadence
@@ -347,6 +403,7 @@ class Ride:
                 self.elapsed += dt
                 self.total.add(power, cadence, left, right, hr, dt, self.ftp)
                 self.lap.add(power, cadence, left, right, hr, dt, self.ftp)
+            self.intense.add(power, moving, self.ftp)
 
             sample = {
                 "t": round(self.elapsed, 1),
@@ -378,6 +435,7 @@ class Ride:
         st["elapsed"] = round(self.elapsed, 1)
         st["ftp"] = self.ftp
         st["efficiency"] = self.efficiency
+        st["intense_s"] = self.intense.seconds   # the intense interval going on, or None
         st["lap"] = self._lap_dict(self.lap, len(self.laps) + 1)
         # As dicts each time, so IF and TSS follow a changed FTP.
         st["laps"] = [self._lap_dict(t, i + 1) for i, t in enumerate(self.laps)]

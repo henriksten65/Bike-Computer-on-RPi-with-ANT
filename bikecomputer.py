@@ -32,7 +32,7 @@ from ridelog import CsvLogger
 import ridelog
 import sources
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 log = logging.getLogger("bikecomputer")
@@ -46,7 +46,7 @@ class Hub:
         self.lock = threading.Lock()
 
     def subscribe(self):
-        q = queue.Queue(maxsize=100)
+        q: queue.Queue = queue.Queue(maxsize=100)
         with self.lock:
             self.clients.add(q)
         return q
@@ -227,6 +227,8 @@ def make_handler(ride, hub, log_dir, settings_path=None, power_buttons=True, all
     pins = PinGuard(settings_path)
 
     class Handler(BaseHTTPRequestHandler):
+        pin_guard = pins     # for tests
+
         def log_message(self, fmt, *args):
             pass
 
@@ -274,9 +276,9 @@ def make_handler(ride, hub, log_dir, settings_path=None, power_buttons=True, all
                     self._send(404, b"not found", "text/plain")
                     return
                 self._download(name, body, "text/csv; charset=utf-8")
-            elif path.startswith("/rides/") and ridelog.TCX_NAME_RE.match(path[len("/rides/"):]):
+            elif path.startswith("/rides/") and (m := ridelog.TCX_NAME_RE.match(path[len("/rides/"):])):
                 name = path[len("/rides/"):]
-                csv_path = os.path.join(log_dir, ridelog.TCX_NAME_RE.match(name).group(1) + ".csv")
+                csv_path = os.path.join(log_dir, m.group(1) + ".csv")
                 try:
                     body = ridelog.to_tcx(csv_path, __version__)
                 except FileNotFoundError:
@@ -433,7 +435,6 @@ def make_handler(ride, hub, log_dir, settings_path=None, power_buttons=True, all
                     log.info("Clock corrected from the browser by %+.0f s", clock.offset)
             self._send(200, b"{}", "application/json")
 
-    Handler.pins = pins     # for tests
     return Handler
 
 
@@ -514,6 +515,7 @@ def main():
     if hr == "ble" and importlib.util.find_spec("bleak") is None:
         raise SystemExit("Bluetooth heart rate needs the 'bleak' module: .venv/bin/pip install -r requirements.txt")
 
+    src: sources.AntSource | sources.BleSource | sources.SimSource
     if args.source == "ant":
         src = sources.AntSource(ride, device_id=args.ant_device_id,
                                 heart_rate=hr == "ant", hr_device_id=args.ant_hr_device_id)

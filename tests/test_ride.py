@@ -76,6 +76,7 @@ class MovingTimeTest(unittest.TestCase):
     def test_stops_when_meter_goes_silent(self):
         r = Ride()
         ride_through(r, [150])
+        assert r._last_reading is not None
         r._last_reading.ts -= ride.STALE_AFTER_S + 1
         s = r.tick(1.0)
         self.assertFalse(s["connected"])
@@ -350,3 +351,76 @@ class SyncedClockTest(unittest.TestCase):
         with mock.patch("ride.os.path.exists", return_value=True) as exists:
             self.assertTrue(ride.system_clock_synced())
         exists.assert_called_once_with(ride.TIMESYNC_FLAG)
+
+
+class IntenseIntervalTest(unittest.TestCase):
+    @staticmethod
+    def feed(det, watts, ftp=None, moving=True):
+        """Feed 1 s power values; return the interval length after each second."""
+        out = []
+        for w in watts:
+            det.add(w, moving, ftp)
+            out.append(det.seconds)
+        return out
+
+    def test_with_ftp(self):
+        det = ride.IntenseDetector()
+        # FTP 200: intense from 210 W. Two seconds aren't enough, the third starts it,
+        # counted from the first of them.
+        self.assertEqual(self.feed(det, [150, 220, 230, 240, 250], ftp=200), [None, None, None, 3, 4])
+
+    def test_a_spike_does_not_start_one(self):
+        det = ride.IntenseDetector()
+        self.assertEqual(self.feed(det, [300, 300, 150, 300, 300, 150], ftp=200), [None] * 6)
+
+    def test_a_short_dip_does_not_end_it(self):
+        det = ride.IntenseDetector()
+        self.feed(det, [250] * 10, ftp=200)
+        # Fading to 180 W (still >= 0.85 x 210) and four easy seconds keep it going.
+        out = self.feed(det, [180] * 5 + [100] * 4 + [250], ftp=200)
+        self.assertEqual(out, list(range(11, 21)))
+
+    def test_ends_after_five_easy_seconds(self):
+        det = ride.IntenseDetector()
+        self.feed(det, [250] * 30, ftp=200)
+        self.assertEqual(self.feed(det, [100] * 5, ftp=200), [31, 32, 33, 34, None])
+        # ... and the next one counts from the start again.
+        self.assertEqual(self.feed(det, [250] * 3, ftp=200), [None, None, 3])
+
+    def test_stopping_ends_it(self):
+        det = ride.IntenseDetector()
+        self.feed(det, [250] * 10, ftp=200)
+        self.assertIsNone(self.feed(det, [0] * 5, ftp=200, moving=False)[-1])
+
+    def test_without_ftp_uses_the_riding_before(self):
+        det = ride.IntenseDetector()
+        # Not before a minute of riding to compare with.
+        self.assertEqual(self.feed(det, [300] * 3), [None] * 3)
+        det = ride.IntenseDetector()
+        self.feed(det, [140] * 60)
+        self.assertEqual(det.level(None), 210)          # 1.5 x 140
+        self.assertEqual(self.feed(det, [205] * 3), [None] * 3)
+        det = ride.IntenseDetector()
+        self.feed(det, [140] * 60)
+        self.assertEqual(self.feed(det, [215] * 3), [None, None, 3])
+
+    def test_without_ftp_never_below_the_minimum(self):
+        det = ride.IntenseDetector()
+        self.feed(det, [60] * 60)                        # 1.5 x 60 = 90 W, but at least 150
+        self.assertEqual(self.feed(det, [140] * 5), [None] * 5)
+        self.assertEqual(self.feed(det, [160] * 3)[-1], 3)
+
+    def test_baseline_leaves_out_intervals(self):
+        det = ride.IntenseDetector()
+        self.feed(det, [140] * 60)
+        self.feed(det, [400] * 60 + [140] * 5)           # interval and its end
+        self.assertEqual(det.level(None), 210)          # still 1.5 x 140
+
+    def test_in_the_ride_stats(self):
+        r = Ride(ftp=200)
+        self.assertIsNone(ride_through(r, [150] * 10)["stats"]["intense_s"])
+        self.assertEqual(ride_through(r, [300] * 20)["stats"]["intense_s"], 20)
+        self.assertIsNone(ride_through(r, [150] * 5)["stats"]["intense_s"])
+        ride_through(r, [300] * 5)
+        r.reset()
+        self.assertIsNone(r.tick(1.0)["stats"]["intense_s"])

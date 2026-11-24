@@ -6,6 +6,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
+from typing import Any, Optional, TextIO
 
 from ride import ZONES, clock, intensity_factor, normalized_power, training_stress, zone
 
@@ -37,9 +38,9 @@ class CsvLogger:
     def __init__(self, directory, keep=10):
         self.dir = directory
         self.keep = keep   # how many ride files to keep (0 = keep all)
-        self.f = None
-        self.w = None
-        self.path = None
+        self.f: Optional[TextIO] = None
+        self.w: Any = None         # csv writer for self.f
+        self.path: Optional[str] = None
         self.error = None          # message for the page while saving fails
         self._opened_mono = None   # time.monotonic() when the file was opened
 
@@ -100,7 +101,7 @@ class CsvLogger:
         Rows already written get the corrected time, and the file is renamed to
         match. Called from the update loop, so it never runs during a write.
         """
-        if self.f is None or not shift:
+        if self.f is None or self.path is None or not shift:
             return
         old = self.path
         try:
@@ -146,7 +147,11 @@ def summarize(path, ftp=None):
     Uses the FTP saved in the file (since 0.7); `ftp` is the fallback for older
     files without one.
     """
-    powers, cads, hrs, lefts, rights = [], [], [], [], []
+    powers: list[float] = []
+    cads: list[float] = []
+    hrs: list[float] = []
+    lefts: list[float] = []
+    rights: list[float] = []
     first = last_elapsed = None
     laps = 1
     file_ftp = None
@@ -193,7 +198,7 @@ def summarize(path, ftp=None):
     }
 
 
-_cache = {}   # path -> ((mtime, size, fallback ftp), summary)
+_cache: dict[str, tuple] = {}   # path -> ((mtime, size, fallback ftp), summary)
 
 
 def list_rides(directory, current=None, ftp=None):
@@ -290,7 +295,7 @@ def to_tcx(path, version="0.0.0"):
     uploader treats it as an indoor ride. Pauses aren't in the file, so they
     show up as gaps in the time.
     """
-    laps = {}   # lap number -> points, in file order
+    laps: dict[int, list] = {}   # lap number -> points, in file order
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
             if _num(row.get("power_w")) is None or not row.get("time_iso"):

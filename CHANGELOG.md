@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.0 (2026-11-24)
+
+### New
+- **Interval timer for HIIT**: when you start riding hard, a red **Hard** timer appears under
+  the ride time and shows how long the interval has lasted. It goes away when you ease off.
+  With an FTP set, hard means above threshold (105 % of FTP); without one, 1.5 times what you
+  were riding before (at least 150 W). It takes 3 s at that level to start, so a spike
+  doesn't count, and 5 s below 85 % of it to end, so a gear change doesn't either.
+- **20 minute window** for the graph, next to 1m, 5m and 10m.
+
+### Changed
+- The Python code is type-checked with mypy (`mypy.ini`), locally and on GitHub. A few type
+  hints were added; nothing changes for riders.
+- The graph's scales fit what it shows: power goes up to the highest shown value in the window
+  instead of at least 300 W, and heart rate to its own range in the window instead of a fixed
+  40–200 bpm. Hiding the left or right line rescales the graph if it was the highest.
+
 ## 0.8.0 (2026-11-24)
 
 ### New
