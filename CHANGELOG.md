@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.8 (2026-11-24)
 
 ### New
 - **Burned (kcal)**: an estimate of the food energy burned, next to Work on the dashboard and
-  for each saved ride. It assumes 24% efficiency, so it comes out close to the kJ number.
+  for each saved ride. It assumes 24% efficiency by default, so it comes out close to the kJ
+  number. Set your own efficiency (15–30 %) under **Training** on the Rides page.
 
 ## 0.7.1 (2026-11-23)
 

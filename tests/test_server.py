@@ -171,6 +171,22 @@ class TrainingEndpointsTest(ServerBase):
         self.assertEqual(self.post("/api/settings", {})[0].status, 400)
         self.assertIsNone(self.ride.ftp)
 
+    def test_set_and_clear_efficiency(self):
+        try:
+            self.assertEqual(self.post("/api/settings", {"efficiency": 20})[0].status, 200)
+            self.assertEqual(self.ride.efficiency, 20)
+            with open(self.settings) as f:
+                self.assertEqual(json.load(f)["efficiency"], 20)
+            self.assertEqual(json.loads(self.request("GET", "/api/rides")[1])["efficiency"], 20)
+            self.assertEqual(self.ride.snapshot()["stats"]["efficiency"], 20)
+            for bad in (5, 50, "20", 20.5, True):
+                self.assertEqual(self.post("/api/settings", {"efficiency": bad})[0].status, 400, bad)
+            self.assertEqual(self.ride.efficiency, 20)
+            self.assertEqual(self.post("/api/settings", {"efficiency": None})[0].status, 200)
+            self.assertEqual(self.ride.efficiency, bikecomputer.EFF_DEFAULT)
+        finally:
+            self.ride.efficiency = bikecomputer.EFF_DEFAULT
+
     def test_settings_file_round_trip(self):
         path = os.path.join(self.dir, "s2.json")
         self.assertEqual(bikecomputer.load_settings(path), {})

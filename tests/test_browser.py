@@ -161,6 +161,17 @@ class BrowserTest(unittest.TestCase):
         self.assertIn("IF", dash.inner_text("#stats"))
         self.post("/api/settings", {"ftp": None})
 
+    def test_efficiency_setting(self):
+        page = self.open("/rides")
+        self.assertEqual(page.input_value("#eff"), "24")
+        page.fill("#eff", "20")
+        page.click("#effform button")
+        page.wait_for_function("document.getElementById('effmsg').textContent.includes('20')", timeout=5000)
+        page.fill("#eff", "50")
+        page.click("#effform button")
+        page.wait_for_function("document.getElementById('effmsg').classList.contains('bad')", timeout=3000)
+        self.post("/api/settings", {"efficiency": None})
+
     def test_ftp_rejects_bad_values(self):
         page = self.open("/rides")
         page.fill("#ftp", "5")

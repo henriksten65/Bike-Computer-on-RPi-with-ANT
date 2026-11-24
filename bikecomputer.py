@@ -32,7 +32,7 @@ from ridelog import CsvLogger
 import ridelog
 import sources
 
-__version__ = "0.7.1"
+__version__ = "0.8"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 log = logging.getLogger("bikecomputer")
@@ -91,6 +91,8 @@ def power_action(action, ride):
 
 # FTP limits accepted from the page, W.
 FTP_MIN, FTP_MAX = 50, 600
+# Efficiency (food energy -> work at the pedals) used for the kcal estimate, %.
+EFF_MIN, EFF_MAX, EFF_DEFAULT = 15, 30, 24
 
 
 def load_settings(path):
@@ -259,7 +261,8 @@ def make_handler(ride, hub, log_dir, settings_path=None, power_buttons=True, all
                 current = ride.logger.path if ride.logger and ride.logger.f else None
                 rides = ridelog.list_rides(log_dir, current=current, ftp=ride.ftp)
                 self._send(200, json.dumps({"rides": rides, "version": __version__,
-                                            "ftp": ride.ftp, "power_buttons": power_buttons,
+                                            "ftp": ride.ftp, "efficiency": ride.efficiency,
+                                            "power_buttons": power_buttons,
                                             "pin_set": pins.is_set()}).encode(),
                            "application/json")
             elif path.startswith("/rides/") and ridelog.NAME_RE.match(path[len("/rides/"):]):
@@ -373,6 +376,13 @@ def make_handler(ride, hub, log_dir, settings_path=None, power_buttons=True, all
                         self._error(400, f"FTP must be {FTP_MIN} to {FTP_MAX} W")
                         return
                     changes["ftp"] = ftp
+                if "efficiency" in body:
+                    eff = body["efficiency"]          # None = back to the default
+                    if eff is not None and (not isinstance(eff, int) or isinstance(eff, bool)
+                                            or not EFF_MIN <= eff <= EFF_MAX):
+                        self._error(400, f"Efficiency must be {EFF_MIN} to {EFF_MAX} %")
+                        return
+                    changes["efficiency"] = eff
                 if "pin" in body:
                     pin = body["pin"]
                     if pin is not None and not (isinstance(pin, str) and PinGuard.PIN_RE.match(pin)):
@@ -394,6 +404,9 @@ def make_handler(ride, hub, log_dir, settings_path=None, power_buttons=True, all
                 if "ftp" in changes:
                     ride.ftp = changes["ftp"]
                     log.info("FTP set to %s", f"{ride.ftp} W" if ride.ftp else "none")
+                if "efficiency" in changes:
+                    ride.efficiency = changes["efficiency"] or EFF_DEFAULT
+                    log.info("Efficiency set to %d %%", ride.efficiency)
                 if "pin" in changes:
                     log.info("PIN %s", "set" if changes["pin"] else "removed")
             elif path == "/api/power":
@@ -466,7 +479,7 @@ def main():
     ap.add_argument("--allow-host", action="append", default=[], metavar="NAME",
                     help="another name the Pi is reached by, for example pi.example.net (can be repeated)")
     ap.add_argument("--settings", default=os.path.join(HERE, "settings.json"),
-                    help="where to keep settings changed on the page, such as FTP")
+                    help="where to keep settings changed on the page, such as FTP and efficiency")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
@@ -486,7 +499,10 @@ def main():
     ftp = settings.get("ftp")
     if not (isinstance(ftp, int) and FTP_MIN <= ftp <= FTP_MAX):
         ftp = None
-    ride = Ride(unknown_balance_side=side, ftp=ftp,
+    efficiency = settings.get("efficiency")
+    if not (isinstance(efficiency, int) and EFF_MIN <= efficiency <= EFF_MAX):
+        efficiency = EFF_DEFAULT
+    ride = Ride(unknown_balance_side=side, ftp=ftp, efficiency=efficiency,
                 logger=None if args.no_log else CsvLogger(args.log_dir, keep=args.keep_rides))
     hub = Hub()
 

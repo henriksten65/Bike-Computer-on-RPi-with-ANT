@@ -217,12 +217,13 @@ class Totals:
 
 
 class Ride:
-    def __init__(self, unknown_balance_side: str = "right", logger=None, ftp=None):
+    def __init__(self, unknown_balance_side: str = "right", logger=None, ftp=None, efficiency=24):
         # Which pedal an "unknown reference" balance value refers to. ANT+ dual-sided
         # meters normally flag it as right; BLE ones normally flag it as left.
         self.unknown_balance_side = unknown_balance_side
         self.logger = logger
         self.ftp = ftp               # functional threshold power, W (None = not set)
+        self.efficiency = efficiency # % of food energy that becomes work at the pedals (for kcal)
         self._lock = threading.Lock()
         # What the data source is doing, shown on the page when no data is coming in.
         # level: "searching" (waiting for the pedals) or "error" (something to fix).
@@ -376,6 +377,7 @@ class Ride:
         st = self.total.to_dict(self.ftp)
         st["elapsed"] = round(self.elapsed, 1)
         st["ftp"] = self.ftp
+        st["efficiency"] = self.efficiency
         st["lap"] = self._lap_dict(self.lap, len(self.laps) + 1)
         # As dicts each time, so IF and TSS follow a changed FTP.
         st["laps"] = [self._lap_dict(t, i + 1) for i, t in enumerate(self.laps)]

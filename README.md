@@ -28,7 +28,8 @@ heart rate strap ──ANT+ or BLE───────────────�
   found)
 - **Ride stats**: average, normalized (NP) and max power, average L/R balance, average cadence,
   average and max heart rate, work (kJ) and an estimate of the food energy burned (kcal,
-  assuming 24% efficiency). Average cadence leaves out coasting.
+  assuming 24% efficiency unless you set your own on the Rides page). Average cadence leaves
+  out coasting.
 - **Training numbers** once you enter your FTP: the current **power zone** (Z1–Z7) on the power
   tile, zone bands on the graph, **time in each zone**, and **IF** and **TSS** for the ride and
   each lap. Each ride keeps the FTP it was ridden with.
@@ -132,6 +133,14 @@ IF and TSS need NP, so they appear after 30 seconds of riding. Below the stats, 
 long you've spent in each zone. The ride list shows all of this for saved rides too. Each ride
 file keeps the FTP it was ridden with, so changing your FTP doesn't change old rides. (Rides
 saved before 0.7 don't have it, so they use the FTP set now, marked "FTP (now)".)
+
+### Calories (kcal)
+
+The kcal number is food energy burned, estimated from the work at the pedals:
+kcal = kJ ÷ (4.184 × efficiency). The body turns only about a quarter of the energy it burns
+into work, so the default of 24 % makes kcal come out close to kJ. If you know your own
+efficiency (most riders are between 20 and 25 %), enter it under **Training** on the **Rides**
+page (15 to 30 %). It is saved in `settings.json` and applies to all rides, old ones too.
 
 ### Laps
 
@@ -240,7 +249,7 @@ Pass these to `bikecomputer.py`. For the service, add them to the `ExecStart` li
 | `--log-dir DIR` | Where to save ride CSV files (default: `rides/`) |
 | `--keep-rides N` | Keep only the newest N ride CSV files and delete older ones (default 10, 0 = keep all) |
 | `--no-log` | Don't save CSV files |
-| `--settings FILE` | Where to keep settings changed on the page, FTP and PIN (default: `settings.json`) |
+| `--settings FILE` | Where to keep settings changed on the page, FTP, efficiency and PIN (default: `settings.json`) |
 | `--no-power` | Hide the power off and restart buttons (for running on a computer) |
 | `--allow-host NAME` | Another name the Pi is reached by, such as `pi.example.net` (see below; can be repeated) |
 | `--version` | Show the version |
