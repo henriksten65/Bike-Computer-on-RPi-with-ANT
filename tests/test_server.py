@@ -50,6 +50,7 @@ class ServerBase(unittest.TestCase):
     def tearDownClass(cls):
         cls.server.shutdown()
         cls.server.server_close()
+        cls.ride.stop_recording()       # close the ride file the tests wrote to
         cls.tmp.cleanup()
 
     def request(self, method, path, body=None, headers=None):
