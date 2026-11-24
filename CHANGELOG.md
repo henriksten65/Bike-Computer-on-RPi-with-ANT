@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.8 (2026-11-24)
+## 0.8.0 (2026-11-24)
 
 ### New
 - **Burned (kcal)**: an estimate of the food energy burned, next to Work on the dashboard and
