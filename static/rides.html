@@ -145,6 +145,9 @@
     if (!d || isNaN(d)) return name;
     return d.toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
   };
+  // Food energy burned, estimated from work: 1 kcal = 4.184 kJ and the body turns
+  // about 24% of it into work at the pedals, so kcal ≈ kJ. Varies from rider to rider.
+  const kcal = (kj) => kj == null ? null : Math.round(kj / (4.184 * 0.24));
   const stat = (k, v, unit) => `<div class="stat"><div class="k">${k}</div><div class="v">${v == null ? "—" : esc(v)}${v == null || !unit ? "" : `<small>${unit}</small>`}</div></div>`;
   const ZONE_NAMES = ["Recovery", "Endurance", "Tempo", "Threshold", "VO2 max", "Anaerobic", "Neuromuscular"];
   const zoneBar = zones => {
@@ -218,6 +221,7 @@
             ${stat("Avg cadence", x.avg_c, "rpm")}
             ${x.avg_hr != null ? stat("Avg HR", x.avg_hr, "bpm") + stat("Max HR", x.max_hr, "bpm") : ""}
             ${stat("Work", x.kj, "kJ")}
+            ${stat("Burned (est.)", kcal(x.kj), "kcal")}
             ${x.if != null ? stat("IF", x.if.toFixed(2)) + stat("TSS", x.tss) : ""}
             ${x.ftp ? stat(x.ftp_saved ? "FTP" : "FTP (now)", x.ftp, "W") : ""}
             ${x.laps > 1 ? stat("Laps", x.laps) : ""}

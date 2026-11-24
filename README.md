@@ -27,7 +27,8 @@ heart rate strap ──ANT+ or BLE───────────────�
 - **Heart rate** from an ANT+ or Bluetooth chest strap or watch (the tile appears once a strap is
   found)
 - **Ride stats**: average, normalized (NP) and max power, average L/R balance, average cadence,
-  average and max heart rate, and work (kJ). Average cadence leaves out coasting.
+  average and max heart rate, work (kJ) and an estimate of the food energy burned (kcal,
+  assuming 24% efficiency). Average cadence leaves out coasting.
 - **Training numbers** once you enter your FTP: the current **power zone** (Z1–Z7) on the power
   tile, zone bands on the graph, **time in each zone**, and **IF** and **TSS** for the ride and
   each lap. Each ride keeps the FTP it was ridden with.

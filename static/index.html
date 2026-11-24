@@ -347,6 +347,7 @@
       `<span>Avg cad <b>${st.avg_c ?? "—"} rpm</b></span>` +
       (st.avg_hr != null ? `<span>Avg HR <b>${st.avg_hr} bpm</b></span><span>Max HR <b>${st.max_hr} bpm</b></span>` : "") +
       `<span>Work <b>${st.kj ?? "—"} kJ</b></span>` +
+      `<span title="Estimated food energy burned, assuming 24% efficiency. Varies from rider to rider.">Burned <b>≈ ${kcal(st.kj) ?? "—"} kcal</b></span>` +
       (ftp ? `<span>IF <b>${st.if != null ? st.if.toFixed(2) : "—"}</b></span><span>TSS <b>${st.tss ?? "—"}</b></span>` : "");
     renderLaps(st);
     renderZones($("zonebar"), ftp ? st.zones : null);
@@ -354,6 +355,10 @@
 
     renderStatus();
   }
+
+  // Food energy burned, estimated from work: 1 kcal = 4.184 kJ and the body turns
+  // about 24% of it into work at the pedals, so kcal ≈ kJ. Varies from rider to rider.
+  const kcal = (kj) => kj == null ? null : Math.round(kj / (4.184 * 0.24));
 
   // ---------- time in zones (same markup on the Rides page)
   function renderZones(box, zones) {
