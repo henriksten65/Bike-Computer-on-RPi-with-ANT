@@ -1,18 +1,16 @@
 # Changelog
 
-## 0.10.1 (2026-11-25)
+## 1.0.0 (2026-11-25)
 
-### Changed
-- With the balance set to **Dial**, it moves up next to Time, Power, Cadence and Heart rate on
-  screens wider than 1100 px, where the numbers in that row get a little smaller to make room.
-  On narrower screens, and with the bar, it keeps its own row.
-
-## 0.10.0 (2026-11-25)
+The first stable release. (0.10.0 and 0.10.1 were steps on the way and were never released.)
 
 ### New
 - **Left/right balance as a dial**: the **Bar | Dial** switch under the balance shows it as a
   needle on a half circle instead of the bar. Straight up is 50/50, and the needle goes all
   the way over at 70 % on one side, so small differences show. The choice is remembered.
+  On screens wider than 1100 px the dial moves up next to Time, Power, Cadence and Heart rate,
+  where the numbers in that row get a little smaller to make room. On narrower screens, and
+  with the bar, it keeps its own row.
 
 ### Changed
 - The time-in-zones bar on the Rides page now looks like the dashboard's: a little thicker,
@@ -20,6 +18,7 @@
 - Saved rides are summed up by the same code as the live ride, so the ride list always shows
   the numbers the dashboard did. The two pages share their colours, styles and helpers
   (`static/common.css` and `static/common.js`).
+- The tests on GitHub use the Node.js 24 versions of the GitHub actions.
 
 ### Fixed
 - Removing old rides only touches files named like a ride (`ride-YYYYMMDD-HHMMSS.csv`). Before,
