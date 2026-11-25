@@ -225,6 +225,20 @@ class BrowserTest(unittest.TestCase):
         page.click("#showH")
         self.assertEqual(page.get_attribute("#showH", "aria-pressed"), "false")
 
+    def test_balance_dial(self):
+        page = self.open("/")
+        page.wait_for_function("document.getElementById('status').textContent === 'Receiving'", timeout=10000)
+        self.assertTrue(page.is_visible("#balbar"))
+        self.assertFalse(page.is_visible("#baldial"))
+        page.click("#balview button[data-v='1']")
+        self.assertFalse(page.is_visible("#balbar"))
+        self.assertTrue(page.is_visible("#baldial"))
+        page.wait_for_function("document.getElementById('needle').style.transform.startsWith('rotate(')", timeout=5000)
+        page.reload()                                           # the choice is remembered
+        self.assertTrue(page.is_visible("#baldial"))
+        page.click("#balview button[data-v='0']")
+        self.assertTrue(page.is_visible("#balbar"))
+
     def test_time_in_zones_bar(self):
         self.post("/api/settings", {"ftp": 200})
         try:

@@ -110,6 +110,17 @@
   .balance .br { background: var(--series-right); transition: flex-basis .4s; }
   .balance .mid50 { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--text-primary); opacity: .6; }
   .baltext { text-align: center; font-size: 14px; color: var(--text-secondary); margin-top: 6px; }
+  /* the balance as a dial: needle on a half circle, 30-70 % each side */
+  .dial { display: block; width: 100%; max-width: 200px; margin: 0 auto; }
+  .dial .arc { fill: none; stroke-width: 14; }
+  .dial .tick { stroke: var(--text-muted); stroke-width: 2; }
+  .dial .tick.c { stroke: var(--text-primary); stroke-width: 3; opacity: .6; }
+  .dial text { fill: var(--text-muted); font-size: 12px; font-family: inherit; }
+  .dial .needle { transition: transform .4s; transform-origin: 100px 100px; }
+  .dial .needle line { stroke: var(--text-primary); stroke-width: 4; stroke-linecap: round; }
+  .dial .needle circle { fill: var(--text-primary); }
+  .balview.seg { display: flex; width: max-content; margin: 6px auto 0; }
+  .balview button { font-size: 12px; padding: 2px 10px; min-height: 26px; }
 
   .btn.lap { color: var(--text-primary); font-weight: 600; border-color: var(--text-muted); min-width: 64px; justify-content: center; }
   .btn.lap.flash { background: var(--surface-2); }
@@ -199,8 +210,22 @@
       <div class="value mid" id="left">—<small>W</small></div>
     </div>
     <div>
-      <div class="balance" aria-hidden="true"><div class="bl" id="bl" style="flex-basis:50%"></div><div class="br" id="br" style="flex-basis:50%"></div><div class="mid50"></div></div>
+      <div class="balance" id="balbar" aria-hidden="true"><div class="bl" id="bl" style="flex-basis:50%"></div><div class="br" id="br" style="flex-basis:50%"></div><div class="mid50"></div></div>
+      <svg class="dial" id="baldial" viewBox="0 0 200 112" aria-hidden="true" hidden>
+        <path class="arc" d="M 20 100 A 80 80 0 0 1 100 20" stroke="var(--series-left)"/>
+        <path class="arc" d="M 100 20 A 80 80 0 0 1 180 100" stroke="var(--series-right)"/>
+        <line class="tick c" x1="100" y1="8" x2="100" y2="32"/>
+        <line class="tick" x1="35" y1="35" x2="46.3" y2="46.3"/>
+        <line class="tick" x1="165" y1="35" x2="153.7" y2="46.3"/>
+        <text x="20" y="112" text-anchor="middle">70</text>
+        <text x="180" y="112" text-anchor="middle">70</text>
+        <g class="needle" id="needle"><line x1="100" y1="100" x2="100" y2="30"/><circle cx="100" cy="100" r="6"/></g>
+      </svg>
       <div class="baltext" id="baltext">L — / R —</div>
+      <div class="seg balview" id="balview" title="Show the left/right balance as a bar or a dial">
+        <button data-v="0" aria-pressed="true">Bar</button>
+        <button data-v="1" aria-pressed="false">Dial</button>
+      </div>
     </div>
     <div class="side right">
       <div class="label">Right<span class="key" style="background:var(--series-right);margin:0 0 0 6px"></span></div>
@@ -248,6 +273,7 @@
   let smoothS = 3;
   let hoverX = null;
   let showL = true, showR = true, showH = true;   // left/right pedal and heart rate lines on the graph
+  let balDial = 0;           // left/right balance: 0 = bar, 1 = dial
 
   // ---------- persisted preferences (best effort)
   try {
@@ -256,6 +282,7 @@
     showL = localStorage.getItem("bc.showL") !== "0";
     showR = localStorage.getItem("bc.showR") !== "0";
     showH = localStorage.getItem("bc.showH") !== "0";
+    balDial = localStorage.getItem("bc.balview") === "1" ? 1 : 0;
   } catch (e) {}
   function setupToggle(id, key, get, set) {
     const b = $(id);
@@ -274,6 +301,9 @@
   }
   setupSeg("win", () => windowS, v => { windowS = v; try { localStorage.setItem("bc.win", v); } catch (e) {} });
   setupSeg("smooth", () => smoothS, v => { smoothS = v; try { localStorage.setItem("bc.smooth", v); } catch (e) {} });
+  const showBalView = () => { $("balbar").hidden = !!balDial; $("baldial").toggleAttribute("hidden", !balDial); };   // an <svg> has no .hidden property
+  setupSeg("balview", () => balDial, v => { balDial = v; showBalView(); try { localStorage.setItem("bc.balview", v); } catch (e) {} });
+  showBalView();
 
   $("reset").onclick = () => {
     if (confirm("Reset the ride? (timer, graph and averages)")) post("/api/reset");
@@ -342,8 +372,12 @@
       $("bl").style.flexBasis = lp + "%";
       $("br").style.flexBasis = (100 - lp) + "%";
       $("baltext").textContent = `L ${lp}% / R ${100 - lp}%`;
+      // Dial: straight up at 50/50, all the way over at 70 % on one side.
+      const t = Math.max(-1, Math.min(1, (50 - lp) / 20));
+      $("needle").style.transform = `rotate(${t * 90}deg)`;
     } else {
       $("baltext").textContent = "L — / R —";
+      $("needle").style.transform = "rotate(0deg)";
     }
     const balTot = (st.avg_l || 0) + (st.avg_r || 0);
     const avgBal = balTot > 0 ? `${Math.round(100 * st.avg_l / balTot)}/${Math.round(100 * st.avg_r / balTot)}` : "—";
