@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1 (2026-11-25)
+
+### Fixed
+- Numbers no longer get cut off in the top row. A ride over an hour (1:23:45) didn't fit in the
+  Time tile at most screen widths, and a 4-digit power, a 3-digit heart rate or a long **Hard**
+  interval could be cut off too. Each number is now no wider than its tile: it gets smaller
+  only when it would not fit, and a short ride's time keeps its full size.
+
 ## 1.0.0 (2026-11-25)
 
 The first stable release. (0.10.0 and 0.10.1 were steps on the way and were never released.)

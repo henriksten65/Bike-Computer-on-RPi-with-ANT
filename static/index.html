@@ -44,10 +44,24 @@
   .label { font-size: 13px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; }
   .value { font-weight: 700; line-height: 1.05; white-space: nowrap; }
   .value small { font-size: .38em; font-weight: 500; color: var(--text-secondary); margin-left: .2em; }
-  .big   { font-size: clamp(56px, 10vw, 104px); }
-  .mid   { font-size: clamp(28px, 6vw, 64px); }
+  /* --fs is the size a number would like; in the top row it is also capped by --fit (below) */
+  .big   { --fs: clamp(56px, 10vw, 104px); font-size: var(--fs); }
+  .mid   { --fs: clamp(28px, 6vw, 64px); font-size: var(--fs); }
   /* the intense interval going on (HIIT), under the ride time */
-  .intense { margin-top: 4px; font-weight: 700; font-size: clamp(18px, 3.6vw, 36px); color: var(--z6); white-space: nowrap; }
+  .intense { margin-top: 4px; font-weight: 700; --fs: clamp(18px, 3.6vw, 36px); font-size: var(--fs); color: var(--z6); white-space: nowrap; }
+  /* No number wider than its tile, at any screen width: --fit is the most its widest text allows,
+     in cqi (1% of the tile's width). 1:23:45 is 4.3em wide, 59:59 3.2em, 9:59 2.5em, 1234 W 2.6em,
+     105 rpm 2.9em, 172 bpm 3.0em, HARD 59:59 5.1em, HARD 9:59 4.5em. */
+  .tiles > .tile:not(.lr) { container-type: inline-size; }
+  .tiles > .tile:not(.lr) :is(.value, .intense) { font-size: min(var(--fs), var(--fit, 32cqi)); }
+  .tiles #time[data-len="4"] { --fit: 38cqi; }
+  .tiles #time[data-len="5"] { --fit: 30cqi; }
+  .tiles #time[data-len="7"] { --fit: 22cqi; }
+  .tiles #time[data-len="8"] { --fit: 19cqi; }
+  .tiles #power { --fit: 36cqi; }
+  .tiles #cad { --fit: 33cqi; }
+  .tiles .intense { --fit: 18cqi; }
+  .tiles .intense[data-len="4"] { --fit: 21cqi; }
   .intense small { font-size: .5em; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; margin-right: .4em; vertical-align: .2em; }
 
   .lr { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 14px; }
@@ -77,11 +91,11 @@
   .tiles .lr > :first-child { grid-area: l; }
   .tiles .lr > .balmid { grid-area: mid; }
   .tiles .lr > .right { grid-area: r; }
-  .tiles .lr .mid { font-size: clamp(22px, 2.6vw, 36px); }
+  .tiles .lr .mid { --fs: clamp(22px, 2.6vw, 36px); }
   /* five tiles in a row: smaller numbers, so a long ride's 1:23:45 and 1000+ W still fit */
   @media (min-width: 1101px) {
-    .tiles.has-bal .big { font-size: clamp(56px, 6.5vw, 96px); }
-    .tiles.has-bal .tile:not(.lr) .mid { font-size: clamp(28px, 3.5vw, 56px); }
+    .tiles.has-bal .big { --fs: clamp(56px, 6.5vw, 96px); }
+    .tiles.has-bal .tile:not(.lr) .mid { --fs: clamp(28px, 3.5vw, 56px); }
   }
   .tiles .lr .dial { max-width: 170px; }
   .tiles .lr .baltext { margin-top: 0; font-size: 13px; }
@@ -130,7 +144,7 @@
     .tiles.has-bal { grid-template-columns: 1fr 1.4fr 1fr; }
     .tiles.has-bal.has-hr { grid-template-columns: 1fr 1.4fr 1fr 1fr; }
     .tiles .lr { grid-column: 1 / -1; grid-template-columns: auto 1fr auto; grid-template-areas: "l mid r"; align-items: center; gap: 14px; }
-    .tiles .lr .mid { font-size: clamp(28px, 6vw, 64px); }
+    .tiles .lr .mid { --fs: clamp(28px, 6vw, 64px); }
     .tiles .lr .dial { max-width: 200px; }
     .tiles .lr .baltext { margin-top: 6px; font-size: 14px; }
   }
@@ -138,10 +152,10 @@
     .tiles { grid-template-columns: 1fr 1fr; }
     .tiles .power { grid-column: 1 / -1; order: -1; }
     .tiles.has-hr { grid-template-columns: 1fr 1fr 1fr; }
-    .tiles.has-hr .mid { font-size: clamp(24px, 7.5vw, 40px); }
+    .tiles.has-hr .mid { --fs: clamp(24px, 7.5vw, 40px); }
     .tiles.has-bal { grid-template-columns: 1fr 1fr; }
     .tiles.has-bal.has-hr { grid-template-columns: 1fr 1fr 1fr; }
-    .tiles .lr .mid { font-size: clamp(24px, 7.5vw, 40px); }
+    .tiles .lr .mid { --fs: clamp(24px, 7.5vw, 40px); }
   }
 </style>
 </head>
@@ -322,9 +336,10 @@
     const st = latest.stats || {};
     const ftp = st.ftp;
     $("time").textContent = fmtTime(st.elapsed);
+    $("time").dataset.len = $("time").textContent.length;   // the longer the time, the smaller it must be to fit
     // An intense interval going on: its own timer, gone when it ends.
     $("intense").hidden = st.intense_s == null;
-    if (st.intense_s != null) $("intenseT").textContent = fmtTime(st.intense_s);
+    if (st.intense_s != null) $("intense").dataset.len = ($("intenseT").textContent = fmtTime(st.intense_s)).length;
     const s = smoothed();
     $("power").innerHTML = num(s.p, "W");
     const z = latest.moving ? zoneOf(s.p, ftp) : null;

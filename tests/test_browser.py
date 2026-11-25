@@ -10,6 +10,8 @@ Set SCREENSHOT_DIR to also save screenshots (phone and desktop, light and dark).
 The server runs with --no-power, so the Power off button can never be pressed.
 """
 
+import functools
+import itertools
 import json
 import os
 import socket
@@ -356,6 +358,34 @@ class BrowserTest(unittest.TestCase):
         self.assertTrue(fits)
         self.shot(page, "dashboard-intense-interval")
         self.assertFalse(open_with(None).is_visible("#intense"))
+
+    def test_long_ride_fits_in_the_tiles(self):
+        # 1234 W and an hour-long interval: the widest numbers there are. The time's size goes
+        # with its length, so try each length, at screen widths from a phone to a big monitor.
+        times = ((599, "9:59"), (3599, "59:59"), (35999, "9:59:59"), (36000, "10:00:00"))
+        for (elapsed, shown), dial, width in itertools.product(times, ("0", "1"), (390, 640, 800, 1100, 1280, 1320, 1600)):
+            with self.subTest(time=shown, dial=dial, width=width):
+                msg = {"type": "sample", "t": 1, "p": 1234, "l": 50, "r": 50, "c": 105, "h": 172,
+                       "lap": 1, "moving": True, "connected": True, "source": {}, "log_error": None,
+                       "stats": {"avg_p": 180, "elapsed": elapsed, "ftp": 250, "intense_s": 3599,
+                                 "laps": [], "lap": {"n": 1, "elapsed": 1.0}}}
+                body = f"data: {json.dumps(msg)}\n\n"
+                ctx = self.browser.new_context(viewport={"width": width, "height": 800})
+                self.addCleanup(ctx.close)
+                page = ctx.new_page()
+                page.add_init_script(f"localStorage.setItem('bc.balview', '{dial}')")
+                # Playwright passes the request as a second argument, so bind the body with partial.
+                page.route("**/events", functools.partial(
+                    lambda body, route: route.fulfill(body=body, content_type="text/event-stream"), body))
+                page.goto(self.base + "/")
+                page.wait_for_function(f"document.getElementById('time').textContent === '{shown}'", timeout=5000)
+                cut = page.evaluate("""() => [...document.querySelectorAll('#tiles .value, #tiles .intense')]
+                    .filter(e => e.offsetParent)
+                    .filter(e => e.scrollWidth > e.clientWidth + 0.5 ||
+                                 e.getBoundingClientRect().right > e.closest('.tile').getBoundingClientRect().right)
+                    .map(e => e.id || e.className)""")
+                self.assertEqual(cut, [], "numbers cut off")
+                ctx.close()
 
     def test_wrong_pin_is_not_kept(self):
         self.post("/api/settings", {"pin": "1357"})
