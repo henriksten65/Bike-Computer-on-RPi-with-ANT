@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.1 (2026-11-25)
+
+### Changed
+- With the balance set to **Dial**, it moves up next to Time, Power, Cadence and Heart rate on
+  screens wider than 1100 px, where the numbers in that row get a little smaller to make room.
+  On narrower screens, and with the bar, it keeps its own row.
+
 ## 0.10.0 (2026-11-25)
 
 ### New

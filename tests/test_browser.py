@@ -239,6 +239,16 @@ class BrowserTest(unittest.TestCase):
         page.click("#balview button[data-v='0']")
         self.assertTrue(page.is_visible("#balbar"))
 
+    def test_dial_moves_into_the_top_row(self):
+        page = self.open("/", DESKTOP)
+        page.click("#balview button[data-v='1']")
+        self.assertEqual(page.evaluate("document.getElementById('lr').parentElement.id"), "tiles")
+        top = page.evaluate("[...document.querySelectorAll('#tiles > .tile')].filter(t => t.offsetParent)"
+                            ".map(t => Math.round(t.getBoundingClientRect().top))")
+        self.assertEqual(len(set(top)), 1, "all tiles in one row")
+        page.click("#balview button[data-v='0']")
+        self.assertEqual(page.evaluate("document.getElementById('tiles').nextElementSibling.id"), "lr")
+
     def test_time_in_zones_bar(self):
         self.post("/api/settings", {"ftp": 200})
         try:

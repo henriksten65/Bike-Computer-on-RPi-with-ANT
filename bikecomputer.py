@@ -32,7 +32,7 @@ from ridelog import CsvLogger
 import ridelog
 import sources
 
-__version__ = "0.10.0"
+__version__ = "0.10.1"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 log = logging.getLogger("bikecomputer")
