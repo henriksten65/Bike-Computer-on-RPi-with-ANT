@@ -86,22 +86,6 @@ class WallClock:
 clock = WallClock()
 
 
-def normalized_power(powers):
-    """Normalized power of a list of 1 s power values (moving seconds only).
-
-    4th-power mean of the 30 s rolling average; None for less than 30 s.
-    Same calculation as the live value in Ride, used for saved rides.
-    """
-    if len(powers) < NP_WINDOW_S:
-        return None
-    window_sum = sum(powers[:NP_WINDOW_S])
-    sum4 = (window_sum / NP_WINDOW_S) ** 4
-    for i in range(NP_WINDOW_S, len(powers)):
-        window_sum += powers[i] - powers[i - NP_WINDOW_S]
-        sum4 += (window_sum / NP_WINDOW_S) ** 4
-    return round((sum4 / (len(powers) - NP_WINDOW_S + 1)) ** 0.25)
-
-
 # --------------------------------------------------------------------------- training numbers
 
 # Power zones as a share of FTP (Coggan): (number, name, upper limit as a fraction of FTP).
@@ -263,7 +247,7 @@ class Totals:
             "if": intensity_factor(np_w, ftp),
             "tss": training_stress(self.seconds, np_w, ftp),
             "avg_hr": round(self.sum_hr / self.n_hr) if self.n_hr else None,
-            "max_hr": self.max_hr or None,
+            "max_hr": round(self.max_hr) if self.n_hr else None,
             "kj": round(self.energy_j / 1000, 1),
             "zones": list(self.zone_s) if any(self.zone_s) else None,
             "elapsed": float(self.seconds),

@@ -10,6 +10,7 @@ from datetime import datetime
 from unittest import mock
 
 import ridelog
+from ride import Reading, Ride
 from ridelog import CsvLogger, list_rides, summarize
 
 
@@ -94,6 +95,26 @@ class SummaryTest(unittest.TestCase):
             w.writerow(header)
             w.writerows(rows)
         return path
+
+    def test_saved_ride_shows_what_the_dashboard_did(self):
+        logger = CsvLogger(self.dir)
+        ride = Ride(logger=logger, ftp=200)
+        for i in range(500):
+            ride.add(Reading(power=100 + (i * 37) % 250, cadence=0 if i % 50 == 0 else 90,
+                             balance_pct=45 + i % 7, balance_side="right"))
+            ride.tick(1.0)
+        ride.add_heart_rate(150)
+        ride.add(Reading(power=180, cadence=90))
+        live = ride.tick(1.0)["stats"]
+        logger.new_file()
+        saved = summarize(path_of(logger))
+        for k in ("avg_p", "np", "max_p", "avg_c", "avg_hr", "max_hr", "kj", "zones"):
+            self.assertEqual(saved[k], live[k], k)
+        self.assertEqual(saved["balance_l"], round(100 * live["avg_l"] / (live["avg_l"] + live["avg_r"])))
+
+    def test_short_ride_has_no_np(self):
+        rows = [[f"2026-11-23T10:00:{i:02d}", i + 1, 200, "", "", 90] for i in range(29)]
+        self.assertIsNone(summarize(self.write("ride-20261123-100000.csv", ridelog.COLUMNS, rows))["np"])
 
     def test_summary_of_a_ride(self):
         rows = [[f"2026-11-23T10:00:{i % 60:02d}", i + 1, 200, 80, 120, 90, 140 + i % 2] for i in range(60)]

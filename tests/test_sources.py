@@ -146,3 +146,59 @@ class ShortPacketTest(unittest.TestCase):
         src._on_notify(None, bytearray([0x21, 0x00, 0xC8, 0x00]))   # says balance + crank, has neither
         src._on_notify(None, bytearray([0x00]))
         self.assertEqual(ride.readings, [])
+
+
+class ChannelSetupTest(unittest.TestCase):
+    """_open_channel, with a stand-in for openant's Node and Channel."""
+
+    class Channel:
+        class Type:
+            BIDIRECTIONAL_RECEIVE = "rx"
+
+        def __init__(self):
+            self.calls = []
+
+        def __getattr__(self, name):          # set_period(...), open(), ...
+            return lambda *a: self.calls.append((name, *a))
+
+    class Node:
+        def new_channel(self, kind):
+            assert kind == "rx"
+            self.ch = ChannelSetupTest.Channel()
+            return self.ch
+
+    def test_power_channel_takes_every_message(self):
+        node, f = self.Node(), lambda d: None
+        sources._open_channel(node, self.Channel, 8182, 0, 11, f, all_messages=True)
+        ch = node.ch
+        self.assertEqual((ch.on_broadcast_data, ch.on_burst_data, ch.on_acknowledge_data), (f, f, f))
+        self.assertEqual(ch.calls, [("set_period", 8182), ("set_search_timeout", 255), ("set_rf_freq", 57),
+                                    ("set_id", 0, 11, 0), ("open",)])
+
+    def test_heart_rate_channel_takes_broadcasts(self):
+        node, f = self.Node(), lambda d: None
+        sources._open_channel(node, self.Channel, 8070, 1234, 120, f)
+        self.assertIs(node.ch.on_broadcast_data, f)
+        self.assertNotIn("on_burst_data", vars(node.ch))
+        self.assertIn(("set_id", 1234, 120, 0), node.ch.calls)
+
+
+class BleMatcherTest(unittest.TestCase):
+    class Dev:
+        def __init__(self, name):
+            self.name = name
+
+    class Adv:
+        def __init__(self, *uuids):
+            self.service_uuids = list(uuids)
+
+    def test_service_must_be_advertised(self):
+        match = sources.ble_matcher(sources.CPS_SERVICE)
+        self.assertTrue(match(self.Dev("Pedals"), self.Adv(sources.CPS_SERVICE.upper())))
+        self.assertFalse(match(self.Dev("Pedals"), self.Adv(sources.HRS_SERVICE)))
+
+    def test_name_filter_ignores_case(self):
+        match = sources.ble_matcher(sources.HRS_SERVICE, "polar")
+        self.assertTrue(match(self.Dev("Polar H10"), self.Adv(sources.HRS_SERVICE)))
+        self.assertFalse(match(self.Dev("Garmin HRM"), self.Adv(sources.HRS_SERVICE)))
+        self.assertFalse(match(self.Dev(None), self.Adv(sources.HRS_SERVICE)))

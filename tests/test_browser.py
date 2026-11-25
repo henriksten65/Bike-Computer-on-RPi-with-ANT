@@ -99,6 +99,12 @@ class BrowserTest(unittest.TestCase):
         self.addCleanup(lambda: self.assertEqual(errors, [], "JavaScript errors on " + path))
         return page
 
+    def dashboard(self):
+        """Open the dashboard and wait until the simulator's data comes in."""
+        page = self.open("/")
+        page.wait_for_function("document.getElementById('status').textContent === 'Receiving'", timeout=10000)
+        return page
+
     def post(self, path, body):
         req = urllib.request.Request(self.base + path, data=json.dumps(body).encode(), method="POST",
                                      headers={"Content-Type": "application/json", "X-Bike-Computer": "1"})
@@ -111,8 +117,7 @@ class BrowserTest(unittest.TestCase):
     # ------------------------------------------------------------------ dashboard
 
     def test_dashboard_shows_live_data(self):
-        page = self.open("/")
-        page.wait_for_function("document.getElementById('status').textContent === 'Receiving'", timeout=10000)
+        page = self.dashboard()
         self.assertRegex(page.inner_text("#power"), r"^\d+")
         self.assertRegex(page.inner_text("#cad"), r"^\d+")
         self.assertRegex(page.inner_text("#left"), r"^\d+")
@@ -121,8 +126,7 @@ class BrowserTest(unittest.TestCase):
         self.assertIn("NP", page.inner_text("#stats"))
 
     def test_graph_draws(self):
-        page = self.open("/")
-        page.wait_for_function("document.getElementById('status').textContent === 'Receiving'", timeout=10000)
+        page = self.dashboard()
         page.wait_for_timeout(2500)
         # Some pixels in the plot must be drawn (lines, grid, labels).
         drawn = page.evaluate("""() => {
@@ -131,16 +135,14 @@ class BrowserTest(unittest.TestCase):
         self.assertGreater(drawn, 1000)
 
     def test_lap_button(self):
-        page = self.open("/")
-        page.wait_for_function("document.getElementById('status').textContent === 'Receiving'", timeout=10000)
+        page = self.dashboard()
         page.wait_for_timeout(1500)
         page.click("#lap")
         page.wait_for_selector("#laps:not([hidden]) table", timeout=5000)
         self.assertIn("Lap 2", page.inner_text("#lapline"))
 
     def test_reset(self):
-        page = self.open("/")
-        page.wait_for_function("document.getElementById('status').textContent === 'Receiving'", timeout=10000)
+        page = self.dashboard()
         page.on("dialog", lambda d: d.accept())
         page.click("#reset")
         page.wait_for_function("parseInt(document.getElementById('time').textContent.split(':')[1]) < 3",
@@ -214,8 +216,7 @@ class BrowserTest(unittest.TestCase):
             urllib.request.urlopen(req, timeout=5)
 
     def test_header_fits_on_one_line_on_a_phone(self):
-        page = self.open("/")
-        page.wait_for_function("document.getElementById('status').textContent === 'Receiving'", timeout=10000)
+        page = self.dashboard()
         self.assertLess(page.eval_on_selector("header", "e => e.offsetHeight"), 60)
 
     def test_heart_rate_line_toggle(self):
@@ -226,8 +227,7 @@ class BrowserTest(unittest.TestCase):
         self.assertEqual(page.get_attribute("#showH", "aria-pressed"), "false")
 
     def test_balance_dial(self):
-        page = self.open("/")
-        page.wait_for_function("document.getElementById('status').textContent === 'Receiving'", timeout=10000)
+        page = self.dashboard()
         self.assertTrue(page.is_visible("#balbar"))
         self.assertFalse(page.is_visible("#baldial"))
         page.click("#balview button[data-v='1']")

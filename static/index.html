@@ -5,60 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#111110">
 <title>Bike Computer</title>
+<link rel="stylesheet" href="/common.css">
 <style>
-  :root {
-    color-scheme: dark;
-    --bg:            #111110;
-    --surface-1:     #1a1a19;
-    --surface-2:     #242422;
-    --border:        #34332f;
-    --text-primary:  #f0efec;
-    --text-secondary:#c3c2b7;
-    --text-muted:    #8d8c84;
-    --grid:          #2c2b28;
-    --series-total:  #199e70;   /* aqua  */
-    --series-left:   #3987e5;   /* blue  */
-    --series-right:  #d95926;   /* orange */
-    --series-hr:     #d6409f;   /* magenta */
-    --ok:            #0ca30c;
-    --warn:          #c98500;
-    --bad:           #e5484d;
-    /* power zones 1-7 */
-    --z1: #8e8d87; --z2: #3b82f6; --z3: #22a06b; --z4: #e0b000;
-    --z5: #f07a1a; --z6: #e5484d; --z7: #a35ee8;
-  }
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) {
-      color-scheme: light;
-      --bg:            #f3f3f1;
-      --surface-1:     #fcfcfb;
-      --surface-2:     #efeeeb;
-      --border:        #dcdbd6;
-      --text-primary:  #0b0b0b;
-      --text-secondary:#52514e;
-      --text-muted:    #75746f;
-      --grid:          #e6e5e1;
-      --series-total:  #1baf7a;
-      --series-left:   #2a78d6;
-      --series-right:  #eb6834;
-      --series-hr:     #c22d8a;
-      --ok:            #008300;
-      --warn:          #b07000;
-      --bad:           #c62a2f;
-      --z1: #75746f; --z2: #2563eb; --z3: #148a5a; --z4: #b38b00;
-      --z5: #d9640a; --z6: #c62a2f; --z7: #8a45cf;
-    }
-  }
-  :root[data-theme="dark"] { color-scheme: dark; }
-
-  * { box-sizing: border-box; }
-  [hidden] { display: none !important; }
   html, body { height: 100%; margin: 0; }
   body {
-    background: var(--bg);
-    color: var(--text-primary);
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    font-variant-numeric: tabular-nums;
     display: flex; flex-direction: column;
     padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
     gap: 10px;
@@ -76,13 +26,12 @@
   }
   .alert.show { display: block; }
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .seg button, .btn {
+  .seg button {
     background: var(--surface-1); color: var(--text-secondary); border: 0;
     font: inherit; font-size: 14px; padding: 8px 12px; cursor: pointer; min-height: 36px;
   }
   .seg button + button { border-left: 1px solid var(--border); }
   .seg button[aria-pressed="true"] { background: var(--surface-2); color: var(--text-primary); font-weight: 600; }
-  .btn { border: 1px solid var(--border); border-radius: 8px; text-decoration: none; display: inline-flex; align-items: center; }
 
   .tiles { display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 10px; }
   .tiles.has-hr { grid-template-columns: 1fr 1.4fr 1fr 1fr; }
@@ -149,11 +98,6 @@
   .legend > button { font: inherit; color: inherit; background: none; border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; cursor: pointer; }
   .legend > button[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
   .legend > button[aria-pressed="false"] .key { background: var(--text-muted) !important; }
-  .zonebar { font-size: 13px; color: var(--text-secondary); }
-  .zonebar .bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; gap: 1px; background: var(--surface-2); }
-  .zonebar .bar div { min-width: 2px; }
-  .zonebar .keys { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; }
-  .zonebar .keys span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--zc); margin-right: 5px; }
   .legend > span { padding: 3px 0; }
   .plot { position: relative; flex: 1; min-height: 0; }
   canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
@@ -234,7 +178,7 @@
   </section>
 
   <section class="stats" id="stats" title="NP = normalized power: like the average, but weights hard efforts more. IF = NP ÷ FTP. TSS = training load: 100 = one hour at FTP."></section>
-  <section class="zonebar" id="zonebar" hidden></section>
+  <section id="zonebar" hidden></section>
   <section class="stats lapline" id="lapline"></section>
 
   <section class="tile chart">
@@ -264,6 +208,7 @@
 
   <section class="tile laps" id="laps" hidden></section>
 
+<script src="/common.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
@@ -284,10 +229,11 @@
     showH = localStorage.getItem("bc.showH") !== "0";
     balDial = localStorage.getItem("bc.balview") === "1" ? 1 : 0;
   } catch (e) {}
+  const store = (key, v) => { try { localStorage.setItem(key, v); } catch (e) {} };
   function setupToggle(id, key, get, set) {
     const b = $(id);
     const sync = () => b.setAttribute("aria-pressed", String(get()));
-    b.onclick = () => { set(!get()); sync(); try { localStorage.setItem(key, get() ? "1" : "0"); } catch (e) {} render(); };
+    b.onclick = () => { set(!get()); sync(); store(key, get() ? "1" : "0"); render(); };
     sync();
   }
   setupToggle("showL", "bc.showL", () => showL, v => showL = v);
@@ -299,21 +245,20 @@
     btns.forEach(b => b.onclick = () => { set(+b.dataset.v); sync(); render(); });
     sync();
   }
-  setupSeg("win", () => windowS, v => { windowS = v; try { localStorage.setItem("bc.win", v); } catch (e) {} });
-  setupSeg("smooth", () => smoothS, v => { smoothS = v; try { localStorage.setItem("bc.smooth", v); } catch (e) {} });
+  setupSeg("win", () => windowS, v => { windowS = v; store("bc.win", v); });
+  setupSeg("smooth", () => smoothS, v => { smoothS = v; store("bc.smooth", v); });
   const showBalView = () => { $("balbar").hidden = !!balDial; $("baldial").toggleAttribute("hidden", !balDial); };   // an <svg> has no .hidden property
-  setupSeg("balview", () => balDial, v => { balDial = v; showBalView(); try { localStorage.setItem("bc.balview", v); } catch (e) {} });
+  setupSeg("balview", () => balDial, v => { balDial = v; showBalView(); store("bc.balview", v); });
   showBalView();
 
   $("reset").onclick = () => {
     if (confirm("Reset the ride? (timer, graph and averages)")) post("/api/reset");
   };
 
-  // POSTs must carry this header; the server rejects POSTs from other web pages.
   function post(path, body) {
     return fetch(path, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Bike-Computer": "1" },
+      headers: POST_HEADERS,
       body: JSON.stringify(body || {}),
     }).catch(() => {});
   }
@@ -321,17 +266,12 @@
   const sendClock = () => post("/api/clock", { now: Date.now() });
 
   // ---------- formatting
-  const fmtTime = s => {
-    s = Math.floor(s || 0);
-    const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, ss = String(s % 60).padStart(2, "0");
-    return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
-  };
   const num = (v, unit) => `${v == null ? "—" : Math.round(v)}<small>${unit}</small>`;
   const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  // Average of the values that are there (null = no value), or null if none are.
+  const mean = xs => { const v = xs.filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
 
-  // ---------- power zones (share of FTP; same limits as ride.py)
-  const ZONES = [[1, "Recovery", .55], [2, "Endurance", .75], [3, "Tempo", .90], [4, "Threshold", 1.05],
-                 [5, "VO2 max", 1.20], [6, "Anaerobic", 1.50], [7, "Neuromuscular", Infinity]];
+  // ---------- power zones (ZONES in common.js)
   const zoneOf = (p, ftp) => ftp && p != null ? ZONES.find(z => p <= z[2] * ftp) : null;
 
   // ---------- numbers
@@ -340,10 +280,7 @@
     if (!latest) return null;
     if (!latest.moving || smoothS <= 1 || history.length === 0) return latest;
     const tail = history.slice(-smoothS);
-    const avg = k => {
-      const v = tail.map(s => s[k]).filter(x => x != null);
-      return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
-    };
+    const avg = k => mean(tail.map(s => s[k]));
     return { p: avg("p"), l: avg("l"), r: avg("r"), c: avg("c"), h: latest.h };
   }
 
@@ -398,22 +335,11 @@
     renderStatus();
   }
 
-  // Food energy burned, estimated from work: 1 kcal = 4.184 kJ and the body turns
-  // about `eff` % of it into work at the pedals (24 % by default, so kcal ≈ kJ).
-  // Set on the Rides page, as it varies from rider to rider.
-  const kcal = (kj, eff) => kj == null ? null : Math.round(kj / (4.184 * (eff || 24) / 100));
-
-  // ---------- time in zones (same markup on the Rides page)
+  // ---------- time in zones
   function renderZones(box, zones) {
-    const total = zones ? zones.reduce((a, b) => a + b, 0) : 0;
-    box.hidden = !total;
-    if (!total) return;
-    const names = ZONES.map(z => z[1]);
-    box.innerHTML = `<div class="bar" role="img" aria-label="Time in power zones">` +
-      zones.map((s, i) => s ? `<div style="flex:${s};background:var(--z${i + 1})" title="Z${i + 1} ${names[i]}: ${fmtTime(s)}"></div>` : "").join("") +
-      `</div><div class="keys">` +
-      zones.map((s, i) => s ? `<span style="--zc:var(--z${i + 1})">Z${i + 1} <b>${fmtTime(s)}</b> · ${Math.round(100 * s / total)}%</span>` : "").join("") +
-      `</div>`;
+    const html = zoneBar(zones, true);
+    box.hidden = !html;
+    if (html) box.innerHTML = html;
   }
 
   // ---------- laps
@@ -495,10 +421,7 @@
     const k = Math.ceil(data.length / maxPts), out = [];
     for (let i = 0; i < data.length; i += k) {
       const chunk = data.slice(i, i + k), o = { t: chunk[0].t, lap: chunk[chunk.length - 1].lap };
-      for (const key of ["p", "l", "r", "c", "h"]) {
-        const v = chunk.map(d => d[key]).filter(x => x != null);
-        o[key] = v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
-      }
+      for (const key of ["p", "l", "r", "c", "h"]) o[key] = mean(chunk.map(d => d[key]));
       out.push(o);
     }
     return [out, k];

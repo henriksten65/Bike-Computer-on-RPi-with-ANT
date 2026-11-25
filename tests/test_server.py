@@ -79,6 +79,18 @@ class ServerTest(ServerBase):
             self.assertIn(b"<html", body)
         self.assertEqual(self.request("GET", "/nope")[0].status, 404)
 
+    def test_shared_files(self):
+        for path, ctype, text in (("/common.css", "text/css", b"--series-left"),
+                                  ("/common.js", "text/javascript", b"function zoneBar")):
+            r, body = self.request("GET", path)
+            self.assertEqual(r.status, 200, path)
+            self.assertTrue(r.getheader("Content-Type").startswith(ctype), path)
+            self.assertIn(text, body)
+        for page in ("/", "/rides"):
+            body = self.request("GET", page)[1]
+            self.assertIn(b'href="/common.css"', body)
+            self.assertIn(b'src="/common.js"', body)
+
     def test_ride_list(self):
         r, body = self.request("GET", "/api/rides")
         data = json.loads(body)

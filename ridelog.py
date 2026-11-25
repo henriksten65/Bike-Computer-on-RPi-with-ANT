@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional, TextIO
 
-from ride import ZONES, clock, intensity_factor, normalized_power, training_stress, zone
+from ride import Totals, clock, intensity_factor, training_stress
 
 log = logging.getLogger("ridelog")
 
@@ -48,8 +48,7 @@ class CsvLogger:
         """Delete the oldest ride files so that only the newest `keep` remain."""
         if self.keep <= 0:
             return
-        rides = sorted(n for n in os.listdir(self.dir)
-                       if n.startswith("ride-") and n.endswith(".csv"))
+        rides = sorted(n for n in os.listdir(self.dir) if NAME_RE.match(n))
         current = os.path.basename(self.path) if self.path else None
         for name in rides[:-self.keep]:
             if name == current:
@@ -144,18 +143,14 @@ def _num(v):
 def summarize(path, ftp=None):
     """Stats for one saved ride file (only moving seconds are in the file).
 
-    Uses the FTP saved in the file (since 0.7); `ftp` is the fallback for older
-    files without one.
+    The rows go through the same Totals as the live ride, so a saved ride shows
+    the same numbers as the dashboard did. Uses the FTP saved in the file (since
+    0.7) for the zones; `ftp` is the fallback for older files without one.
     """
-    powers: list[float] = []
-    cads: list[float] = []
-    hrs: list[float] = []
-    lefts: list[float] = []
-    rights: list[float] = []
+    totals = Totals()
     first = last_elapsed = None
     laps = 1
     file_ftp = None
-    zone_s = [0] * len(ZONES)
     with open(path, newline="") as f:
         for row in csv.DictReader(f):
             p = _num(row.get("power_w"))
@@ -163,38 +158,30 @@ def summarize(path, ftp=None):
                 continue
             first = first or row.get("time_iso")
             last_elapsed = _num(row.get("elapsed_s"))
-            powers.append(p)
             laps = max(laps, int(_num(row.get("lap")) or 1))
             row_ftp = _num(row.get("ftp_w"))
             if row_ftp:
                 file_ftp = round(row_ftp)
-            z = zone(p, row_ftp or ftp)
-            if z:
-                zone_s[z - 1] += 1
-            for lst, key in ((cads, "cadence_rpm"), (hrs, "heart_rate_bpm"),
-                             (lefts, "left_w"), (rights, "right_w")):
-                v = _num(row.get(key))
-                if v is not None:
-                    lst.append(v)
-    n = len(powers)
-    avg = lambda xs: round(sum(xs) / len(xs)) if xs else None
-    cads = [c for c in cads if c > 0]          # coasting doesn't count
-    bal = sum(lefts) + sum(rights)
+            totals.add(p, _num(row.get("cadence_rpm")), _num(row.get("left_w")), _num(row.get("right_w")),
+                       _num(row.get("heart_rate_bpm")), ftp=row_ftp or ftp)
+    st = totals.to_dict()
+    ridden = totals.seconds > 0
+    bal = totals.sum_left + totals.sum_right
     return {
         "start": first,
         "moving_s": round(last_elapsed or 0),
-        "avg_p": avg(powers),
-        "np": normalized_power(powers),
-        "max_p": round(max(powers)) if n else None,
-        "avg_c": avg(cads),
-        "avg_hr": avg(hrs),
-        "max_hr": round(max(hrs)) if hrs else None,
-        "balance_l": round(100 * sum(lefts) / bal) if bal > 0 else None,
-        "kj": round(sum(powers) / 1000, 1),   # 1 s samples: W x 1 s = J
+        "avg_p": st["avg_p"] if ridden else None,
+        "np": st["np"],
+        "max_p": st["max_p"] if ridden else None,
+        "avg_c": st["avg_c"],
+        "avg_hr": st["avg_hr"],
+        "max_hr": st["max_hr"],
+        "balance_l": round(100 * totals.sum_left / bal) if bal > 0 else None,
+        "kj": st["kj"],                        # 1 s samples: W x 1 s = J
         "laps": laps,
         "ftp": file_ftp or ftp,
         "ftp_saved": file_ftp is not None,     # False: the current FTP was used
-        "zones": zone_s if any(zone_s) else None,
+        "zones": st["zones"],
     }
 
 

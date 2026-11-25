@@ -32,7 +32,7 @@ from ridelog import CsvLogger
 import ridelog
 import sources
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 log = logging.getLogger("bikecomputer")
@@ -93,6 +93,11 @@ def power_action(action, ride):
 FTP_MIN, FTP_MAX = 50, 600
 # Efficiency (food energy -> work at the pedals) used for the kcal estimate, %.
 EFF_MIN, EFF_MAX, EFF_DEFAULT = 15, 30, 24
+
+
+def int_in(v, lo, hi):
+    """True if v is a whole number from lo to hi (JSON true/false don't count)."""
+    return isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi
 
 
 def load_settings(path):
@@ -217,6 +222,17 @@ def host_allowed(host_header, extra=()):
             or host in {h.lower() for h in extra})
 
 
+# Files from static/ served as they are: URL path -> (file, content type).
+STATIC_FILES = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/index.html": ("index.html", "text/html; charset=utf-8"),
+    "/rides": ("rides.html", "text/html; charset=utf-8"),
+    "/rides/": ("rides.html", "text/html; charset=utf-8"),
+    "/common.css": ("common.css", "text/css; charset=utf-8"),
+    "/common.js": ("common.js", "text/javascript; charset=utf-8"),
+}
+
+
 def history_columns(history):
     """Samples as one list per value: about a third of the size for long rides."""
     keys = ("t", "p", "l", "r", "c", "h", "lap")
@@ -232,33 +248,25 @@ def make_handler(ride, hub, log_dir, settings_path=None, power_buttons=True, all
         def log_message(self, fmt, *args):
             pass
 
-        def _send(self, code, body, ctype):
+        def _send(self, code, body, ctype, download=None):
+            """Send a reply; `download` = file name to save it as."""
             self.send_response(code)
             self.send_header("Content-Type", ctype)
+            if download:
+                self.send_header("Content-Disposition", f'attachment; filename="{download}"')
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
 
-        def _download(self, name, body, ctype):
-            self.send_response(200)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Disposition", f'attachment; filename="{name}"')
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
-
-        def _page(self, name):
+        def _static(self, name, ctype):
             with open(os.path.join(HERE, "static", name), "rb") as f:
-                self._send(200, f.read(), "text/html; charset=utf-8")
+                self._send(200, f.read(), ctype)
 
         def do_GET(self):
             path = urlsplit(self.path).path
-            if path in ("/", "/index.html"):
-                self._page("index.html")
-            elif path in ("/rides", "/rides/"):
-                self._page("rides.html")
+            if path in STATIC_FILES:
+                self._static(*STATIC_FILES[path])
             elif path == "/api/rides":
                 current = ride.logger.path if ride.logger and ride.logger.f else None
                 rides = ridelog.list_rides(log_dir, current=current, ftp=ride.ftp)
@@ -267,17 +275,15 @@ def make_handler(ride, hub, log_dir, settings_path=None, power_buttons=True, all
                                             "power_buttons": power_buttons,
                                             "pin_set": pins.is_set()}).encode(),
                            "application/json")
-            elif path.startswith("/rides/") and ridelog.NAME_RE.match(path[len("/rides/"):]):
-                name = path[len("/rides/"):]
+            elif path.startswith("/rides/") and ridelog.NAME_RE.match(name := path[len("/rides/"):]):
                 try:
                     with open(os.path.join(log_dir, name), "rb") as f:
                         body = f.read()
                 except FileNotFoundError:
                     self._send(404, b"not found", "text/plain")
                     return
-                self._download(name, body, "text/csv; charset=utf-8")
-            elif path.startswith("/rides/") and (m := ridelog.TCX_NAME_RE.match(path[len("/rides/"):])):
-                name = path[len("/rides/"):]
+                self._send(200, body, "text/csv; charset=utf-8", download=name)
+            elif path.startswith("/rides/") and (m := ridelog.TCX_NAME_RE.match(name := path[len("/rides/"):])):
                 csv_path = os.path.join(log_dir, m.group(1) + ".csv")
                 try:
                     body = ridelog.to_tcx(csv_path, __version__)
@@ -287,7 +293,7 @@ def make_handler(ride, hub, log_dir, settings_path=None, power_buttons=True, all
                 except ValueError as e:      # empty ride
                     self._send(409, f"Can't export this ride: {e}".encode(), "text/plain; charset=utf-8")
                     return
-                self._download(name, body, "application/vnd.garmin.tcx+xml")
+                self._send(200, body, "application/vnd.garmin.tcx+xml", download=name)
             elif path == "/api/history":
                 snap = ride.snapshot()
                 snap["history"] = history_columns(snap["history"])
@@ -373,15 +379,13 @@ def make_handler(ride, hub, log_dir, settings_path=None, power_buttons=True, all
                 changes = {}
                 if "ftp" in body:
                     ftp = body["ftp"]
-                    if ftp is not None and (not isinstance(ftp, int) or isinstance(ftp, bool)
-                                            or not FTP_MIN <= ftp <= FTP_MAX):
+                    if ftp is not None and not int_in(ftp, FTP_MIN, FTP_MAX):
                         self._error(400, f"FTP must be {FTP_MIN} to {FTP_MAX} W")
                         return
                     changes["ftp"] = ftp
                 if "efficiency" in body:
                     eff = body["efficiency"]          # None = back to the default
-                    if eff is not None and (not isinstance(eff, int) or isinstance(eff, bool)
-                                            or not EFF_MIN <= eff <= EFF_MAX):
+                    if eff is not None and not int_in(eff, EFF_MIN, EFF_MAX):
                         self._error(400, f"Efficiency must be {EFF_MIN} to {EFF_MAX} %")
                         return
                     changes["efficiency"] = eff
@@ -498,10 +502,10 @@ def main():
     side = args.unknown_balance_side or ("left" if args.source == "ble" else "right")
     settings = load_settings(args.settings)
     ftp = settings.get("ftp")
-    if not (isinstance(ftp, int) and FTP_MIN <= ftp <= FTP_MAX):
+    if not int_in(ftp, FTP_MIN, FTP_MAX):
         ftp = None
     efficiency = settings.get("efficiency")
-    if not (isinstance(efficiency, int) and EFF_MIN <= efficiency <= EFF_MAX):
+    if not int_in(efficiency, EFF_MIN, EFF_MAX):
         efficiency = EFF_DEFAULT
     ride = Ride(unknown_balance_side=side, ftp=ftp, efficiency=efficiency,
                 logger=None if args.no_log else CsvLogger(args.log_dir, keep=args.keep_rides))

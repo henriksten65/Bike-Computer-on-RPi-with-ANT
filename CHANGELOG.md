@@ -1,11 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.10.0 (2026-11-25)
 
 ### New
 - **Left/right balance as a dial**: the **Bar | Dial** switch under the balance shows it as a
   needle on a half circle instead of the bar. Straight up is 50/50, and the needle goes all
   the way over at 70 % on one side, so small differences show. The choice is remembered.
+
+### Changed
+- The time-in-zones bar on the Rides page now looks like the dashboard's: a little thicker,
+  with the times in bold.
+- Saved rides are summed up by the same code as the live ride, so the ride list always shows
+  the numbers the dashboard did. The two pages share their colours, styles and helpers
+  (`static/common.css` and `static/common.js`).
+
+### Fixed
+- Removing old rides only touches files named like a ride (`ride-YYYYMMDD-HHMMSS.csv`). Before,
+  another file starting with `ride-` and ending in `.csv` could be removed too.
 
 ## 0.9.0 (2026-11-24)
 

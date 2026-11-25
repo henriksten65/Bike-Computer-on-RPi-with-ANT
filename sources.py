@@ -49,6 +49,24 @@ def _ant_stick_present():
         return None
 
 
+def _open_channel(node, Channel, period, device_id, device_type, on_data, all_messages=False):
+    """Open a receive channel that searches forever for one ANT+ device.
+
+    `all_messages`: also take burst and acknowledged messages, not only broadcasts.
+    """
+    ch = node.new_channel(Channel.Type.BIDIRECTIONAL_RECEIVE)
+    ch.on_broadcast_data = on_data
+    if all_messages:
+        ch.on_burst_data = on_data
+        ch.on_acknowledge_data = on_data
+    ch.set_period(period)
+    ch.set_search_timeout(255)        # search forever
+    ch.set_rf_freq(ANT_RF_FREQ)
+    ch.set_id(device_id, device_type, 0)
+    ch.open()
+    return ch
+
+
 class AntSource:
     """Receives the ANT+ Bicycle Power profile (device type 11).
 
@@ -119,25 +137,13 @@ class AntSource:
                 self.node = None
                 self.node = Node()
                 self.node.set_network_key(0x00, ANTPLUS_NETWORK_KEY)
-                ch = self.node.new_channel(Channel.Type.BIDIRECTIONAL_RECEIVE)
-                ch.on_broadcast_data = self._on_data
-                ch.on_burst_data = self._on_data
-                ch.on_acknowledge_data = self._on_data
-                ch.set_period(ANT_POWER_PERIOD)
-                ch.set_search_timeout(255)        # search forever
-                ch.set_rf_freq(ANT_RF_FREQ)
-                ch.set_id(self.device_id, ANT_DEVICE_TYPE_POWER, 0)
-                ch.open()
+                _open_channel(self.node, Channel, ANT_POWER_PERIOD, self.device_id, ANT_DEVICE_TYPE_POWER,
+                              self._on_data, all_messages=True)
                 log.info("ANT+ channel open, searching for power meter (device id %s)",
                          self.device_id or "any")
                 if self.heart_rate:
-                    hr = self.node.new_channel(Channel.Type.BIDIRECTIONAL_RECEIVE)
-                    hr.on_broadcast_data = self._on_hr_data
-                    hr.set_period(ANT_HR_PERIOD)
-                    hr.set_search_timeout(255)
-                    hr.set_rf_freq(ANT_RF_FREQ)
-                    hr.set_id(self.hr_device_id, ANT_DEVICE_TYPE_HR, 0)
-                    hr.open()
+                    _open_channel(self.node, Channel, ANT_HR_PERIOD, self.hr_device_id, ANT_DEVICE_TYPE_HR,
+                                  self._on_hr_data)
                     self._hr_found = False
                     log.info("ANT+ heart rate channel open (device id %s)", self.hr_device_id or "any")
                 self._last_event = None
@@ -201,6 +207,16 @@ class AntSource:
 
 # --------------------------------------------------------------------------- BLE
 
+def ble_matcher(service, name_filter=None):
+    """Scanner filter: devices that advertise `service`, and whose name contains
+    `name_filter` (any case) when one is given."""
+    def match(dev, adv):
+        if service not in [u.lower() for u in adv.service_uuids]:
+            return False
+        return not name_filter or name_filter.lower() in (dev.name or "").lower()
+    return match
+
+
 CPS_SERVICE = "00001818-0000-1000-8000-00805f9b34fb"
 CPS_MEASUREMENT = "00002a63-0000-1000-8000-00805f9b34fb"
 
@@ -232,14 +248,7 @@ class BleSource:
         from bleak import BleakScanner
         if self.address:
             return await BleakScanner.find_device_by_address(self.address, timeout=20)
-
-        def match(dev, adv):
-            if CPS_SERVICE not in [u.lower() for u in adv.service_uuids]:
-                return False
-            if self.name_filter:
-                return self.name_filter.lower() in (dev.name or "").lower()
-            return True
-        return await BleakScanner.find_device_by_filter(match, timeout=20)
+        return await BleakScanner.find_device_by_filter(ble_matcher(CPS_SERVICE, self.name_filter), timeout=20)
 
     async def _run(self):
         from bleak import BleakClient
@@ -343,12 +352,7 @@ class BleHeartRate:
 
     async def _run(self):
         from bleak import BleakClient, BleakScanner
-
-        def match(dev, adv):
-            if HRS_SERVICE not in [u.lower() for u in adv.service_uuids]:
-                return False
-            return not self.name_filter or self.name_filter.lower() in (dev.name or "").lower()
-
+        match = ble_matcher(HRS_SERVICE, self.name_filter)
         while True:
             try:
                 dev = await BleakScanner.find_device_by_filter(match, timeout=20)

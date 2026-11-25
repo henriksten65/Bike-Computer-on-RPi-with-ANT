@@ -5,7 +5,7 @@ import unittest
 from unittest import mock
 
 import ride
-from ride import Reading, Ride, WallClock, normalized_power
+from ride import Reading, Ride, WallClock
 
 
 def ride_through(r, watts, **kw):
@@ -121,11 +121,6 @@ class NormalizedPowerTest(unittest.TestCase):
         self.assertEqual(st["avg_p"], 200)
         self.assertEqual(st["np"], 273)
 
-    def test_function_matches_live_value(self):
-        watts = [100 + (i * 37) % 250 for i in range(500)]
-        live = ride_through(Ride(), watts)["stats"]["np"]
-        self.assertEqual(normalized_power(watts), live)
-        self.assertIsNone(normalized_power([200] * 29))
 
 
 class HeartRateTest(unittest.TestCase):

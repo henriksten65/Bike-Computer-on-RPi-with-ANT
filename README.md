@@ -316,6 +316,7 @@ On older Raspberry Pi OS versions the command is `chromium-browser`.
 | `ridelog.py` | Ride CSV files: writing, keeping the newest 10, reading them back for the ride list, and TCX export |
 | `static/index.html` | The dashboard |
 | `static/rides.html` | The ride list, with downloads and the power off button |
+| `static/common.css`, `static/common.js` | Colours, styles and helpers both pages share |
 | `deploy/` | Install script, Wi-Fi hotspot script, systemd service template and udev rule for the Pi |
 | `CHANGELOG.md` | What changed in each version |
 | `tests/` | Tests, including `test_browser.py`, which opens the pages in a real browser |

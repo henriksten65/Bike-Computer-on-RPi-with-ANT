@@ -5,57 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#111110">
 <title>Rides · Bike Computer</title>
+<link rel="stylesheet" href="/common.css">
 <style>
-  :root {
-    color-scheme: dark;
-    --bg:            #111110;
-    --surface-1:     #1a1a19;
-    --surface-2:     #242422;
-    --border:        #34332f;
-    --text-primary:  #f0efec;
-    --text-secondary:#c3c2b7;
-    --text-muted:    #8d8c84;
-    --accent:        #199e70;
-    --bad:           #e5484d;
-    --z1: #8e8d87; --z2: #3b82f6; --z3: #22a06b; --z4: #e0b000;
-    --z5: #f07a1a; --z6: #e5484d; --z7: #a35ee8;
-  }
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) {
-      color-scheme: light;
-      --bg:            #f3f3f1;
-      --surface-1:     #fcfcfb;
-      --surface-2:     #efeeeb;
-      --border:        #dcdbd6;
-      --text-primary:  #0b0b0b;
-      --text-secondary:#52514e;
-      --text-muted:    #75746f;
-      --accent:        #138a60;
-      --bad:           #c62a2f;
-      --z1: #75746f; --z2: #2563eb; --z3: #148a5a; --z4: #b38b00;
-      --z5: #d9640a; --z6: #c62a2f; --z7: #8a45cf;
-    }
-  }
-  :root[data-theme="dark"] { color-scheme: dark; }
-
-  * { box-sizing: border-box; }
-  [hidden] { display: none !important; }
   body {
-    margin: 0; background: var(--bg); color: var(--text-primary);
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    font-variant-numeric: tabular-nums;
     padding: 12px 16px calc(24px + env(safe-area-inset-bottom));
     max-width: 900px; margin: 0 auto;
   }
   header { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
   h1 { font-size: 22px; margin: 0; margin-right: auto; }
   h2 { font-size: 15px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; margin: 26px 0 10px; font-weight: 600; }
-  .btn {
-    background: var(--surface-1); color: var(--text-secondary); border: 1px solid var(--border);
-    border-radius: 8px; font: inherit; font-size: 14px; padding: 8px 12px; min-height: 36px;
-    cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
-  }
-  .btn:hover { color: var(--text-primary); }
   .btn.danger { border-color: var(--bad); color: var(--text-primary); }
   .btn:disabled { opacity: .5; cursor: default; }
 
@@ -82,11 +40,7 @@
   }
   .ftp label { font-size: 14px; color: var(--text-secondary); min-width: 32px; }
   .ftp + .ftp { margin-top: 10px; }
-  .zonebar { font-size: 13px; color: var(--text-secondary); margin-top: 10px; }
-  .zonebar .bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; gap: 1px; background: var(--surface-2); }
-  .zonebar .bar div { min-width: 2px; }
-  .zonebar .keys { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 5px; }
-  .zonebar .keys span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--zc); margin-right: 5px; }
+  .zonebar { margin-top: 10px; }
 </style>
 </head>
 <body>
@@ -140,36 +94,18 @@
   <div class="msg" id="msg" role="status"></div>
   <p class="note" id="version"></p>
 
+<script src="/common.js"></script>
 <script>
 (() => {
   const $ = id => document.getElementById(id);
   const esc = v => String(v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const fmtDur = s => {
-    s = Math.round(s || 0);
-    const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, ss = String(s % 60).padStart(2, "0");
-    return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
-  };
   const fmtWhen = (iso, name) => {
     // time_iso has a UTC offset since 0.7.1; older files have none and are read as local time.
     const d = iso ? new Date(iso) : null;
     if (!d || isNaN(d)) return name;
     return d.toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
   };
-  // Food energy burned, estimated from work: 1 kcal = 4.184 kJ and the body turns
-  // about `eff` % of it into work at the pedals (24 % by default, so kcal ≈ kJ).
-  // Set on the Rides page, as it varies from rider to rider.
-  const kcal = (kj, eff) => kj == null ? null : Math.round(kj / (4.184 * (eff || 24) / 100));
   const stat = (k, v, unit) => `<div class="stat"><div class="k">${k}</div><div class="v">${v == null ? "—" : esc(v)}${v == null || !unit ? "" : `<small>${unit}</small>`}</div></div>`;
-  const ZONE_NAMES = ["Recovery", "Endurance", "Tempo", "Threshold", "VO2 max", "Anaerobic", "Neuromuscular"];
-  const zoneBar = zones => {
-    const total = zones ? zones.reduce((a, b) => a + b, 0) : 0;
-    if (!total) return "";
-    return `<div class="zonebar"><div class="bar" role="img" aria-label="Time in power zones">` +
-      zones.map((s, i) => s ? `<div style="flex:${s};background:var(--z${i + 1})" title="Z${i + 1} ${ZONE_NAMES[i]}: ${fmtDur(s)}"></div>` : "").join("") +
-      `</div><div class="keys">` +
-      zones.map((s, i) => s ? `<span style="--zc:var(--z${i + 1})">Z${i + 1} ${fmtDur(s)}</span>` : "").join("") +
-      `</div></div>`;
-  };
 
   // ---------- POST with the dashboard header, asking for the PIN when one is set
   const PIN_KEY = "bc.pin";
@@ -183,7 +119,7 @@
     for (let attempt = 0; ; attempt++) {
       const r = await fetch(path, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Bike-Computer": "1", "X-PIN": pin },
+        headers: { ...POST_HEADERS, "X-PIN": pin },
         body: JSON.stringify(body),
       });
       const j = await r.json().catch(() => ({}));
@@ -225,7 +161,7 @@
             </span>
           </div>
           <div class="grid">
-            ${stat("Moving time", fmtDur(x.moving_s))}
+            ${stat("Moving time", fmtTime(x.moving_s))}
             ${stat("Avg power", x.avg_p, "W")}
             ${stat("NP", x.np, "W")}
             ${stat("Max power", x.max_p, "W")}
@@ -245,16 +181,18 @@
     }
   }
 
+  // A message under a form or button; `bad` shows it as an error.
+  const say = (id, text, bad) => { $(id).className = bad ? "msg bad" : "msg"; $(id).textContent = text; };
+
   async function power(action, question, doneText) {
     if (!confirm(question)) return;
-    const msg = $("msg");
-    msg.className = "msg"; msg.textContent = "Sending…";
+    say("msg", "Sending…");
     $("poweroff").disabled = $("reboot").disabled = true;
     try {
       await api("/api/power", { action });
-      msg.textContent = doneText;
+      say("msg", doneText);
     } catch (e) {
-      msg.className = "msg bad"; msg.textContent = e.message;
+      say("msg", e.message, true);
       $("poweroff").disabled = $("reboot").disabled = false;
     }
   }
@@ -265,55 +203,41 @@
     "Restart the Raspberry Pi? The ride stops recording.",
     "Restarting. The dashboard is back in about a minute.");
 
-  $("ftpform").onsubmit = async ev => {
-    ev.preventDefault();
-    const msg = $("ftpmsg"), raw = $("ftp").value.trim();
-    const ftp = raw === "" ? null : Math.round(+raw);
-    if (ftp !== null && !(ftp >= 50 && ftp <= 600)) {
-      msg.className = "msg bad"; msg.textContent = "FTP must be between 50 and 600 W."; return;
-    }
-    try {
-      await api("/api/settings", { ftp });
-      msg.className = "msg"; msg.textContent = ftp ? `Saved: FTP ${ftp} W.` : "FTP cleared.";
-      $("ftp").blur(); load();
-    } catch (e) {
-      msg.className = "msg bad"; msg.textContent = e.message;
-    }
-  };
-
-  $("effform").onsubmit = async ev => {
-    ev.preventDefault();
-    const msg = $("effmsg"), raw = $("eff").value.trim();
-    const efficiency = raw === "" ? null : Math.round(+raw);
-    if (efficiency !== null && !(efficiency >= 15 && efficiency <= 30)) {
-      msg.className = "msg bad"; msg.textContent = "Efficiency must be between 15 and 30 %."; return;
-    }
-    try {
-      await api("/api/settings", { efficiency });
-      msg.className = "msg"; msg.textContent = `Saved: efficiency ${efficiency ?? 24} %.`;
-      $("eff").blur(); load();
-    } catch (e) {
-      msg.className = "msg bad"; msg.textContent = e.message;
-    }
-  };
+  // A whole-number setting from a form: empty = null (cleared, or the default).
+  // `name` is the id of its input (with "form" and "msg" for the others), `key` the setting.
+  function numberSetting(name, key, lo, hi, tooFar, saved) {
+    const form = $(name + "form"), input = $(name), msg = name + "msg";
+    form.onsubmit = async ev => {
+      ev.preventDefault();
+      const raw = input.value.trim();
+      const v = raw === "" ? null : Math.round(+raw);
+      if (v !== null && !(v >= lo && v <= hi)) { say(msg, tooFar, true); return; }
+      try {
+        await api("/api/settings", { [key]: v });
+        say(msg, saved(v));
+        input.blur(); load();
+      } catch (e) {
+        say(msg, e.message, true);
+      }
+    };
+  }
+  numberSetting("ftp", "ftp", 50, 600, "FTP must be between 50 and 600 W.", v => v ? `Saved: FTP ${v} W.` : "FTP cleared.");
+  numberSetting("eff", "efficiency", 15, 30, "Efficiency must be between 15 and 30 %.", v => `Saved: efficiency ${v ?? 24} %.`);
 
   async function setPin(pin) {
-    const msg = $("pinmsg");
     try {
       await api("/api/settings", { pin });
       keepPin(pin);
-      msg.className = "msg"; msg.textContent = pin ? "PIN saved." : "PIN removed.";
+      say("pinmsg", pin ? "PIN saved." : "PIN removed.");
       $("pin").value = ""; load();
     } catch (e) {
-      msg.className = "msg bad"; msg.textContent = e.message;
+      say("pinmsg", e.message, true);
     }
   }
   $("pinform").onsubmit = ev => {
     ev.preventDefault();
     const pin = $("pin").value.trim();
-    if (!/^\d{4,8}$/.test(pin)) {
-      $("pinmsg").className = "msg bad"; $("pinmsg").textContent = "The PIN must be 4 to 8 digits."; return;
-    }
+    if (!/^\d{4,8}$/.test(pin)) { say("pinmsg", "The PIN must be 4 to 8 digits.", true); return; }
     setPin(pin);
   };
   $("pinclear").onclick = () => { if (confirm("Remove the PIN?")) setPin(null); };

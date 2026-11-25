@@ -1,0 +1,70 @@
+/* Shared by the dashboard and the Rides page: colours, base styles, buttons, time-in-zones bar. */
+:root {
+  color-scheme: dark;
+  --bg:            #111110;
+  --surface-1:     #1a1a19;
+  --surface-2:     #242422;
+  --border:        #34332f;
+  --text-primary:  #f0efec;
+  --text-secondary:#c3c2b7;
+  --text-muted:    #8d8c84;
+  --grid:          #2c2b28;
+  --accent:        #199e70;
+  --series-total:  #199e70;   /* aqua  */
+  --series-left:   #3987e5;   /* blue  */
+  --series-right:  #d95926;   /* orange */
+  --series-hr:     #d6409f;   /* magenta */
+  --ok:            #0ca30c;
+  --warn:          #c98500;
+  --bad:           #e5484d;
+  /* power zones 1-7 */
+  --z1: #8e8d87; --z2: #3b82f6; --z3: #22a06b; --z4: #e0b000;
+  --z5: #f07a1a; --z6: #e5484d; --z7: #a35ee8;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+    --bg:            #f3f3f1;
+    --surface-1:     #fcfcfb;
+    --surface-2:     #efeeeb;
+    --border:        #dcdbd6;
+    --text-primary:  #0b0b0b;
+    --text-secondary:#52514e;
+    --text-muted:    #75746f;
+    --grid:          #e6e5e1;
+    --accent:        #138a60;
+    --series-total:  #1baf7a;
+    --series-left:   #2a78d6;
+    --series-right:  #eb6834;
+    --series-hr:     #c22d8a;
+    --ok:            #008300;
+    --warn:          #b07000;
+    --bad:           #c62a2f;
+    --z1: #75746f; --z2: #2563eb; --z3: #148a5a; --z4: #b38b00;
+    --z5: #d9640a; --z6: #c62a2f; --z7: #8a45cf;
+  }
+}
+:root[data-theme="dark"] { color-scheme: dark; }
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+.btn {
+  background: var(--surface-1); color: var(--text-secondary); border: 1px solid var(--border);
+  border-radius: 8px; font: inherit; font-size: 14px; padding: 8px 12px; min-height: 36px;
+  cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+}
+.btn:hover { color: var(--text-primary); }
+
+/* time in zones (zoneBar() in common.js) */
+.zonebar { font-size: 13px; color: var(--text-secondary); }
+.zonebar .bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; gap: 1px; background: var(--surface-2); }
+.zonebar .bar div { min-width: 2px; }
+.zonebar .keys { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; }
+.zonebar .keys span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--zc); margin-right: 5px; }
