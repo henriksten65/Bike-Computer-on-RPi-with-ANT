@@ -365,7 +365,7 @@ class BrowserTest(unittest.TestCase):
         times = ((599, "9:59"), (3599, "59:59"), (35999, "9:59:59"), (36000, "10:00:00"))
         for (elapsed, shown), dial, width in itertools.product(times, ("0", "1"), (390, 640, 800, 1100, 1280, 1320, 1600)):
             with self.subTest(time=shown, dial=dial, width=width):
-                msg = {"type": "sample", "t": 1, "p": 1234, "l": 50, "r": 50, "c": 105, "h": 172,
+                msg = {"type": "sample", "t": 1, "p": 1234, "l": 999, "r": 999, "c": 105, "h": 172,
                        "lap": 1, "moving": True, "connected": True, "source": {}, "log_error": None,
                        "stats": {"avg_p": 180, "elapsed": elapsed, "ftp": 250, "intense_s": 3599,
                                  "laps": [], "lap": {"n": 1, "elapsed": 1.0}}}
@@ -381,7 +381,7 @@ class BrowserTest(unittest.TestCase):
                 page.wait_for_function(f"document.getElementById('time').textContent === '{shown}'", timeout=5000)
                 cut = page.evaluate("""() => [...document.querySelectorAll('#tiles .value, #tiles .intense')]
                     .filter(e => e.offsetParent)
-                    .filter(e => e.scrollWidth > e.clientWidth + 0.5 ||
+                    .filter(e => e.scrollWidth > e.clientWidth + 0.5 || e.getBoundingClientRect().left < e.closest('.tile').getBoundingClientRect().left ||
                                  e.getBoundingClientRect().right > e.closest('.tile').getBoundingClientRect().right)
                     .map(e => e.id || e.className)""")
                 self.assertEqual(cut, [], "numbers cut off")

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.2 (2026-11-27)
+
+### Changed
+- With the balance dial in the top row, the numbers there are bigger: the dial's tile is
+  narrower, and the left and right watts under the dial are small, each next to its colour
+  key, since the dial already shows the balance. The extra size reduction for a row of five
+  tiles is gone; each number now only gets smaller when it would not fit in its tile.
+
 ## 1.0.1 (2026-11-25)
 
 ### Fixed
