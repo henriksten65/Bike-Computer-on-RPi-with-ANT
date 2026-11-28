@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.3 (2026-11-28)
+
+### Fixed
+- Power of 1000 W or more no longer runs out of its tile on screens 800 px and wider: a
+  four-digit power is now a little smaller, while three-digit power keeps its size.
+- The test that checks long-ride numbers fit in their tiles now really shows 1234 W. Before,
+  the simulator's ride history was averaged in, so it usually measured about 170 W instead.
+
 ## 1.0.2 (2026-11-27)
 
 ### Changed

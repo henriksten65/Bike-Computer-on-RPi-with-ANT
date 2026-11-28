@@ -374,11 +374,14 @@ class BrowserTest(unittest.TestCase):
                 self.addCleanup(ctx.close)
                 page = ctx.new_page()
                 page.add_init_script(f"localStorage.setItem('bc.balview', '{dial}')")
+                # No history from the simulator: averaged with it, the tile would show its ~170 W, not 1234 W.
+                page.route("**/api/history", lambda route: route.fulfill(json={"history": {}}))
                 # Playwright passes the request as a second argument, so bind the body with partial.
                 page.route("**/events", functools.partial(
                     lambda body, route: route.fulfill(body=body, content_type="text/event-stream"), body))
                 page.goto(self.base + "/")
                 page.wait_for_function(f"document.getElementById('time').textContent === '{shown}'", timeout=5000)
+                self.assertEqual(page.inner_text("#power").replace("\n", ""), "1234W")
                 cut = page.evaluate("""() => [...document.querySelectorAll('#tiles .value, #tiles .intense')]
                     .filter(e => e.offsetParent)
                     .filter(e => e.scrollWidth > e.clientWidth + 0.5 || e.getBoundingClientRect().left < e.closest('.tile').getBoundingClientRect().left ||

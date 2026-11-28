@@ -50,7 +50,7 @@
   /* the intense interval going on (HIIT), under the ride time */
   .intense { margin-top: 4px; font-weight: 700; --fs: clamp(18px, 3.6vw, 36px); font-size: var(--fs); color: var(--z6); white-space: nowrap; }
   /* No number wider than its tile, at any screen width: --fit is the most its widest text allows,
-     in cqi (1% of the tile's width). 1:23:45 is 4.3em wide, 59:59 3.2em, 9:59 2.5em, 1234 W 2.6em,
+     in cqi (1% of the tile's width). 1:23:45 is 4.3em wide, 59:59 3.2em, 9:59 2.5em, 999 W 2.6em, 1234 W 3.24em,
      105 rpm 2.9em, 172 bpm 3.0em, HARD 59:59 5.1em, HARD 9:59 4.5em. */
   .tiles > .tile:not(.lr) { container-type: inline-size; }
   .tiles > .tile:not(.lr) :is(.value, .intense) { font-size: min(var(--fs), var(--fit, 32cqi)); }
@@ -59,6 +59,7 @@
   .tiles #time[data-len="7"] { --fit: 22cqi; }
   .tiles #time[data-len="8"] { --fit: 19cqi; }
   .tiles #power { --fit: 36cqi; }
+  .tiles #power[data-len="4"] { --fit: 29cqi; }
   .tiles #cad { --fit: 33cqi; }
   .tiles .intense { --fit: 18cqi; }
   .tiles .intense[data-len="4"] { --fit: 21cqi; }
@@ -346,6 +347,7 @@
     if (st.intense_s != null) $("intense").dataset.len = ($("intenseT").textContent = fmtTime(st.intense_s)).length;
     const s = smoothed();
     $("power").innerHTML = num(s.p, "W");
+    $("power").dataset.len = s.p == null ? 1 : String(Math.round(s.p)).length;   // 1000+ W must be smaller to fit
     const z = latest.moving ? zoneOf(s.p, ftp) : null;
     $("zone").classList.toggle("show", !!z);
     if (z) { $("zone").textContent = `Z${z[0]} ${z[1]}`; $("zone").style.setProperty("--zc", `var(--z${z[0]})`); }
